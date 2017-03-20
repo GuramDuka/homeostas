@@ -1,0 +1,6 @@
+#include "connections.hpp"
+
+connections::connections(QObject *parent) : QObject(parent)
+{
+
+}
