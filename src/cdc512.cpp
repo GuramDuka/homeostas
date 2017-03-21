@@ -181,10 +181,7 @@ std::string cdc512::generate_prime()
     clock_gettime(CLOCK_REALTIME, &ts);
 
     r.srand(ts.tv_sec ^ uintptr_t(&s), ts.tv_nsec ^ uintptr_t(&s), ts.tv_sec ^ ts.tv_nsec);
-
-    // warming up random generator
-    for( size_t i = r.N; i > 0; i-- )
-        r.get();
+    r.warming();
 
     uint64_t v = 0;
 

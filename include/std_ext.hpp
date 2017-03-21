@@ -33,8 +33,24 @@
 #if __GNUC__ < 5
 #include <sstream>
 #endif
+#include <QtDebug>
 //------------------------------------------------------------------------------
 namespace std {
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+class qdbgstream : public stringstream {
+    private:
+        QDebug & qdbg_;
+    public:
+        qdbgstream() : qdbg_(qDebug().nospace().noquote()) {}
+
+        qdbgstream & flush() {
+            qdbg_ << QString::fromStdString(str());
+        }
+};
+//------------------------------------------------------------------------------
+extern thread_local qdbgstream qerr;
 //------------------------------------------------------------------------------
 template <typename T, typename T1, typename T2, typename T3> inline
 T str_replace(const T1 & subject, const T2 & search, const T3 & replace) {

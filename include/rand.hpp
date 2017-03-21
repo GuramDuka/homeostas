@@ -103,6 +103,12 @@ public:
         randinit(&rc_, true);
     }
 
+    // warming up random generator
+    void warming(size_t i = N) {
+        while( i-- > 0 )
+            get();
+    }
+
 protected:
     struct randctx {
         T randrsl[N];

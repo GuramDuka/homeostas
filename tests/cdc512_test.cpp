@@ -36,11 +36,9 @@ void cdc512_test()
 	bool fail = false;
 
 	try {
-        std::string s;
 #ifndef NDEBUG
-        std::cerr << (s = cdc512::generate_prime()) << std::endl;
+        std::qerr << cdc512::generate_prime() << std::endl;
 #endif
-
 		uint8_t t[240] = { 0 };
 
 		for( size_t i = 1; i < sizeof(t); i++ )

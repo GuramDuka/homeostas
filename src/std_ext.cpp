@@ -22,32 +22,11 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
-#include <QGuiApplication>
-#include <QQmlApplicationEngine>
-#include <QQmlContext>
-#include <QtDebug>
+#include "std_ext.hpp"
 //------------------------------------------------------------------------------
-#include "config.h"
-#include "qobjects.hpp"
+namespace std {
 //------------------------------------------------------------------------------
-int main(int argc,char ** argv)
-{
-    qSetMessagePattern("[%{type}] (%{file}:%{line}) - %{message}");
-
-    spacenet::tests::run_tests();
-
-    QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
-    QGuiApplication app(argc, argv);
-
-    qmlRegisterType<QDirectoryTracker>("com.homeostas.directorytracker", 1, 0, "QDirectoryTracker");
-
-    QQmlApplicationEngine engine;
-
-    //QDirectoryTracker directory_tracker;
-    //engine.rootContext()->setContextProperty("directoryTracker", &directory_tracker);
-
-    engine.load(QUrl(QLatin1String("qrc:/main.qml")));
-
-    return app.exec();
-}
+thread_local qdbgstream qerr;
+//------------------------------------------------------------------------------
+} // namespace std
 //------------------------------------------------------------------------------

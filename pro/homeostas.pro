@@ -1,4 +1,4 @@
-QT += qml quick quickcontrols2
+QT += qml quick
 
 CONFIG += c++14
 
@@ -50,8 +50,6 @@ CONFIG += c++14
 #    #QMAKE_CXXFLAGS += $$QMAKE_CXXFLAGS_CXX14
 #}
 
-message($$QMAKE_)
-
 CONFIG(release, debug|release) {
     QMAKE_CXXFLAGS_RELEASE += $$QMAKE_CXXFLAGS_OPTIMIZE_FULL
     QMAKE_CXXFLAGS_RELEASE_WITH_DEBUGINFO += $$QMAKE_CXXFLAGS_OPTIMIZE_FULL
@@ -82,7 +80,8 @@ SOURCES += \
     ../tests/rand_test.cpp \
     ../tests/all_tests.cpp \
     ../src/port.cpp \
-    ../src/connections.cpp
+    ../src/qobjects.cpp \
+    ../src/std_ext.cpp
 
 HEADERS += \
     ../include/cdc512.hpp \
@@ -98,7 +97,8 @@ HEADERS += \
     ../include/sqlite/sqlite3ext.h \
     ../include/tracker.hpp \
     ../include/rand.hpp \
-    ../include/port.hpp
+    ../include/port.hpp \
+    ../include/qobjects.hpp
 
 INCLUDEPATH += .
 INCLUDEPATH += ../include
@@ -106,10 +106,10 @@ INCLUDEPATH += ../include
 RESOURCES += ../src/qml/qml.qrc
 
 # Additional import path used to resolve QML modules in Qt Creator's code model
-QML_IMPORT_PATH =
+QML_IMPORT_PATH = ../src
 
 # Additional import path used to resolve QML modules just for Qt Quick Designer
-QML_DESIGNER_IMPORT_PATH =
+QML_DESIGNER_IMPORT_PATH = ../src
 
 # The following define makes your compiler emit warnings if you use
 # any feature of Qt which as been marked deprecated (the exact warnings
@@ -126,3 +126,4 @@ DEFINES += QT_DEPRECATED_WARNINGS
 qnx: target.path = /tmp/$${TARGET}/bin
 else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
+
