@@ -26,7 +26,7 @@
 //------------------------------------------------------------------------------
 #include "locale_traits.hpp"
 //------------------------------------------------------------------------------
-namespace spacenet {
+namespace homeostas {
 //------------------------------------------------------------------------------
 namespace tests {
 //------------------------------------------------------------------------------
@@ -35,36 +35,32 @@ void locale_traits_test()
 	bool fail = false;
 
     auto loc = std::locale();
-    std::cerr << "locale name: " << loc.name() << std::endl;
+    std::qerr << "locale name: " << loc.name() << std::endl;
 
 	try {
-        string
-#if _WIN32
-        s1 = utf2str(u8"А"), s2 = utf2str(u8"Б"), s3 = utf2str(u8"Я");
-#else
-        s1 = u8"А", s2 = u8"Б", s3 = u8"Я";
-#endif
+        QString s1 = "А", s2 = "Б", s3 = "Я";
 
         bool a1 = s1 < s2;
         bool a2 = s1 < s3;
         bool a3 = s2 < s3;
 
         if( !a1 || !a2 || !a3 )
-            a1 = a2 = a3;//throw std::runtime_error("bad locale traits implementation");
+            a1 = a2 = a3;
+            //throw std::runtime_error("bad locale traits implementation");
 
 	}
     catch (const std::exception & e) {
-        std::cerr << e.what() << std::endl;
+        std::qerr << e << std::endl;
         fail = true;
     }
     catch (...) {
 		fail = true;
 	}
 
-    std::cerr << "locale traits test " << (fail ? "failed" : "passed") << std::endl;
+    std::qerr << "locale traits test " << (fail ? "failed" : "passed") << std::endl;
 }
 //------------------------------------------------------------------------------
 } // namespace tests
 //------------------------------------------------------------------------------
-} // namespace spacenet
+} // namespace homeostas
 //------------------------------------------------------------------------------

@@ -58,16 +58,11 @@ extern "C" int clock_gettime(int dummy, struct timespec * ct);
 //------------------------------------------------------------------------------
 #endif
 //------------------------------------------------------------------------------
-namespace spacenet {
+namespace homeostas {
 //------------------------------------------------------------------------------
-extern const string::value_type path_delimiter[];
+extern const char path_delimiter[];
 //------------------------------------------------------------------------------
-#if _WIN32
-const wchar_t *
-#else
-const char *
-#endif
-getenv(const string & var_name);
+std::string getenv(const std::string & var_name);
 //------------------------------------------------------------------------------
 #if _WIN32
 #ifndef F_OK
@@ -83,16 +78,16 @@ getenv(const string & var_name);
 #define R_OK 4
 #endif
 #endif
-int access(const string & path_name, int mode);
+int access(const std::string & path_name, int mode);
 //------------------------------------------------------------------------------
-int mkdir(const string & path_name);
-string home_path(bool no_back_slash = false);
-string temp_path(bool no_back_slash = false);
-string temp_name(string dir = string(), string pfx = string());
-string get_cwd(bool no_back_slash = false);
-string path2rel(const string & path, bool no_back_slash = false);
+int mkdir(const std::string & path_name);
+std::string home_path(bool no_back_slash = false);
+std::string temp_path(bool no_back_slash = false);
+std::string temp_name(std::string dir = std::string(), std::string pfx = std::string());
+std::string get_cwd(bool no_back_slash = false);
+std::string path2rel(const std::string & path, bool no_back_slash = false);
 //------------------------------------------------------------------------------
-} // namespace spacenet
+} // namespace homeostas
 //------------------------------------------------------------------------------
 #endif // PORT_HPP_INCLUDED
 //------------------------------------------------------------------------------

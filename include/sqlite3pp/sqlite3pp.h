@@ -669,7 +669,7 @@ namespace sqlite3pp {
         };
 
         struct str_equal {
-           bool operator()(const char * val1, const char * val2) const {
+           bool operator ()(const char * val1, const char * val2) const {
               return strcmp(val1, val2) == 0;
            }
         };
@@ -1015,13 +1015,10 @@ namespace sqlite3pp {
 
     class transaction : noncopyable {
     public:
-
-        explicit transaction(database& db, bool freserve = false, bool frollback = false)
-            : db_(&db), frollback_(frollback)
+        explicit transaction(database * db, bool immediate = false, bool rollback = false)
+            : db_(db), rollback_(rollback)
         {
-            int rc = db_->execute(freserve ? "BEGIN IMMEDIATE" : "BEGIN");
-            if (rc != SQLITE_OK)
-                db_->throw_database_error();
+            start(immediate);
         }
 
         ~transaction() {
@@ -1029,23 +1026,31 @@ namespace sqlite3pp {
                 // execute() can return error. If you want to check the error,
                 // call commit() or rollback() explicitly before this object is
                 // destructed.
-                db_->execute(frollback_ ? "ROLLBACK" : "COMMIT");
+                db_->execute(rollback_ ? "ROLLBACK" : "COMMIT");
             }
         }
 
-        int commit() {
-            auto db = db_;
+        auto & release() {
             db_ = nullptr;
-            int rc = db->execute("COMMIT");
+            return *this;
+        }
+
+        int start(bool immediate = false) {
+            int rc = db_->execute(immediate ? "BEGIN IMMEDIATE" : "BEGIN DEFERRED");
+            if (rc != SQLITE_OK)
+                db_->throw_database_error();
+            return rc;
+        }
+
+        int commit() {
+            int rc = db_->execute("COMMIT");
             if (rc != SQLITE_OK)
                 db_->throw_database_error();
             return rc;
         }
 
         int rollback() {
-            auto db = db_;
-            db_ = nullptr;
-            int rc = db->execute("ROLLBACK");
+            int rc = db_->execute("ROLLBACK");
             if (rc != SQLITE_OK)
                 db_->throw_database_error();
             return rc;
@@ -1053,7 +1058,7 @@ namespace sqlite3pp {
 
     private:
         database * db_;
-        bool frollback_;
+        bool rollback_;
     };
 } // namespace sqlite3pp
 

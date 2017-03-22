@@ -25,6 +25,9 @@
 #include "config.h"
 //------------------------------------------------------------------------------
 #include <stack>
+#include <regex>
+#include <QString>
+#include <QRegExp>
 //------------------------------------------------------------------------------
 #include "port.hpp"
 #include "scope_exit.hpp"
@@ -32,7 +35,7 @@
 #include "cdc512.hpp"
 #include "indexer.hpp"
 //------------------------------------------------------------------------------
-namespace spacenet {
+namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
@@ -43,13 +46,13 @@ struct file_stat :
 	public stat
 #endif
 {
-    file_stat(const string & file_name) noexcept {
+    file_stat(const std::string & file_name) noexcept {
 		stat(file_name);
 	}
 
-    int stat(const string & file_name) noexcept {
+    int stat(const std::string & file_name) noexcept {
 #if _WIN32
-        return _wstat64(file_name.c_str(), this);
+        return _wstat64(QString::fromStdString(file_name).toStdWString().c_str(), this);
 #else
 		return ::stat(file_name.c_str(), this);
 #endif
@@ -58,10 +61,10 @@ struct file_stat :
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-void directory_reader::read(const string & root_path)
+void directory_reader::read(const std::string & root_path)
 {
-    regex mask_regex(mask_.empty() ? CPPX_U(".*") : mask_);
-    regex exclude_regex(exclude_);
+    QRegExp mask_regex(mask_.empty() ? ".*" : mask_.c_str());
+    QRegExp exclude_regex(exclude_.c_str());
 
     path_ = root_path;
 
@@ -74,7 +77,7 @@ void directory_reader::read(const string & root_path)
 #else
 		DIR * handle;
 #endif
-        string path;
+        std::string path;
 	};
 
 	std::stack<stack_entry> stack;
@@ -129,7 +132,7 @@ void directory_reader::read(const string & root_path)
 
 #if _WIN32
 		if( handle == INVALID_HANDLE_VALUE ) {
-            handle = FindFirstFileW((path_ + L"\\*").c_str(), &fdw);
+            handle = FindFirstFileW(QString::fromStdString(path_ + "\\*").toStdWString().c_str(), &fdw);
 #else
 		if( handle == nullptr ) {
             handle = ::opendir(path_.c_str());
@@ -154,7 +157,7 @@ void directory_reader::read(const string & root_path)
 			if( err == ERROR_PATH_NOT_FOUND )
 				return;
             throw std::runtime_error(
-                str2utf(L"Failed to open directory: " + path_ + L", " + std::to_wstring(err)));
+                "Failed to open directory: " + path_ + ", " + std::to_string(err));
 
 #else
 		if( handle == nullptr ) {
@@ -189,7 +192,7 @@ void directory_reader::read(const string & root_path)
             if( lstrcmpW(fdw.cFileName, L"..") == 0 && !list_dotdot_ )
 				continue;
 
-            name_ = fdw.cFileName;
+            name_ = QString::fromWCharArray(fdw.cFileName).toStdString();
 #elif HAVE_READDIR_R
 		for(;;) {
 			if( readdir_r(handle, ent, &result) != 0 ) {
@@ -225,10 +228,11 @@ void directory_reader::read(const string & root_path)
 
             name_ = ent->d_name;
 #endif
-            bool match = std::regex_match(name_, mask_regex);
+            auto qname = QString::fromStdString(name_);
+            bool match = mask_regex.indexIn(qname) != -1;
 
             if( match && !exclude_.empty() )
-                match = !std::regex_match(name_, exclude_regex);
+                match = exclude_regex.indexIn(qname) == -1;
 
             path_name_ = path_ + path_delimiter + name_;
 
@@ -323,7 +327,7 @@ void directory_reader::read(const string & root_path)
                 && (err = GetLastError()) != ERROR_NO_MORE_FILES
                 && !abort_ )
             throw std::runtime_error(
-                str2utf(L"Failed to read directory: " + path_ + L", " + std::to_wstring(err)));
+                "Failed to read directory: " + path_ + ", " + std::to_string(err));
 #endif
 	}
 };
@@ -332,9 +336,13 @@ void directory_reader::read(const string & root_path)
 //------------------------------------------------------------------------------
 void directory_indexer::reindex(
     sqlite3pp::database & db,
-    const string & dir_path_name,
+    const std::string & dir_path_name,
     bool * p_shutdown)
 {
+    auto exceptions_safe = db.exceptions();
+    at_scope_exit( db.exceptions(exceptions_safe) );
+    db.exceptions(true);
+
     db.execute_all(R"EOS(
         CREATE TABLE IF NOT EXISTS entries (
             is_alive		INTEGER NOT NULL,   /* boolean */
@@ -445,6 +453,36 @@ void directory_indexer::reindex(
 
     typedef std::vector<uint8_t> blob;
 
+    sqlite3pp::transaction tx(&db);
+
+    auto get_realtime_clock = [] {
+        struct timespec ts;
+
+        clock_gettime(CLOCK_REALTIME, &ts);
+
+        return 1000000000ull * ts.tv_sec + ts.tv_nsec;
+    };
+
+    auto ms2ns = [] (auto ms) {
+        return 1000ull * ms;
+    };
+
+    //struct timespec tx_start; // auto tx_start = std::chrono::system_clock::now();
+    auto tx_start = get_realtime_clock();
+
+    auto tx_deadline = [&] {
+        //using namespace std::chrono_literals;
+        //auto now = std::chrono::system_clock::now();
+        //auto deadline = tx_start + 100ms;
+        auto now = get_realtime_clock();
+        auto deadline = tx_start + ms2ns(50);
+
+        if( now >= deadline ) {
+            tx.commit();
+            tx.start();
+        }
+    };
+
     auto update_block_digest = [&] (
         uint64_t entry_id,
         uint64_t blk_no,
@@ -469,6 +507,8 @@ void directory_indexer::reindex(
             bind(st_blk_upd);
             st_blk_upd.execute();
         }
+
+        tx_deadline();
     };
 
 	auto update_entry = [&] (
@@ -542,6 +582,8 @@ void directory_indexer::reindex(
         if( id == 0 )
             get_id_mtim();
 
+        tx_deadline();
+
         return id;
     };
 
@@ -549,7 +591,7 @@ void directory_indexer::reindex(
 
     auto update_blocks = [&] (
         cdc512 & file_ctx,
-        const string & path_name,
+        const std::string & path_name,
         uint64_t entry_id,
         uint64_t mtim,
         size_t block_size)
@@ -576,7 +618,7 @@ void directory_indexer::reindex(
 
         auto err = errno;
 #if _WIN32
-        err = _wsopen_s(&in, path_name.c_str(), _O_RDONLY, _SH_DENYNO, _S_IREAD | _S_IWRITE);
+        err = _wsopen_s(&in, QString::fromStdString(path_name).toStdWString().c_str(), _O_RDONLY, _SH_DENYNO, _S_IREAD | _S_IWRITE);
 #elif __GNUC__ < 5
         in = ::open(path_name.c_str(), O_RDONLY);
         err = in == -1 ? errno : 0;
@@ -649,6 +691,8 @@ void directory_indexer::reindex(
         st_blk_del.bind("block_no", blk_no);
         st_blk_del.execute();
 
+        tx_deadline();
+
         return true;
     };
 
@@ -663,18 +707,15 @@ void directory_indexer::reindex(
         if( access(dr.path_name_, R_OK | (dr.is_dir_ ? X_OK : 0)) != 0 )
             return;
 
-        auto utf_name = str2utf(dr.name_);
-        auto utf_path = str2utf(dr.path_);
-
         uint64_t parent_id = [&] {
-            auto pit = parents.find(utf_path);
+            auto pit = parents.find(dr.path_);
 
 			if( pit == parents.cend() ) {
                 if( dr.level_ > 1 )
 					throw std::runtime_error("Undefined behavior");
 
-                auto id = update_entry(0, utf_path, true, 0, 0, 0, 0);
-                parents.emplace(std::make_pair(utf_path, id));
+                auto id = update_entry(0, dr.path_, true, 0, 0, 0, 0);
+                parents.emplace(std::make_pair(dr.path_, id));
                 return id;
             }
 
@@ -686,7 +727,7 @@ void directory_indexer::reindex(
         uint64_t mtim, fmtim = dr.mtime_ * 1000000000 + dr.mtime_ns_;
         uint64_t entry_id = update_entry(
             parent_id,
-            utf_name,
+            dr.name_,
             dr.is_dir_,
             fmtim,
             dr.fsize_,
@@ -694,7 +735,7 @@ void directory_indexer::reindex(
             &mtim);
 
         if( dr.is_dir_ )
-            parents.emplace(std::make_pair(str2utf(dr.path_name_), entry_id));
+            parents.emplace(std::make_pair(dr.path_name_, entry_id));
 
         // if file modified then calculate digests
 
@@ -716,28 +757,6 @@ void directory_indexer::reindex(
     dr.read(dir_path_name);
 		
     auto cleanup_entries = [&db] {
-        //sqlite3pp::query st_sel(db, R"EOS(
-        //    SELECT
-        //        rowid
-        //    FROM
-        //        entries
-        //    WHERE
-        //        is_alive <> 0
-        //)EOS");
-
-        //sqlite3pp::command st_del(db, R"EOS(
-        //    DELETE FROM blocks_digests
-        //    WHERE
-        //        entry_id = :entry_id
-        //)EOS");
-
-        sqlite3pp::transaction xct(db, true);
-
-        //for( auto i = st_sel.begin(); i != st_sel.end(); i++ ) {
-        //    st_del.bind(0, i->get<uint64_t>(0));
-        //    st_del.execute();
-        //}
-
         db.execute_all(R"EOS(
             DELETE FROM blocks_digests WHERE entry_id IN (
                 SELECT
@@ -750,12 +769,10 @@ void directory_indexer::reindex(
             DELETE FROM entries WHERE is_alive <> 0;
             UPDATE entries SET is_alive = 1;
         )EOS");
-
-        xct.commit();
     };
 
     cleanup_entries();
 }
 //------------------------------------------------------------------------------
-} // namespace spacenet
+} // namespace homeostas
 //------------------------------------------------------------------------------

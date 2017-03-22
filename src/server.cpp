@@ -22,34 +22,63 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
-#include <iostream>
-//------------------------------------------------------------------------------
-#include "locale_traits.hpp"
-#include "cdc512.hpp"
-#include "rand.hpp"
-#include "indexer.hpp"
-#include "tracker.hpp"
-#include "thread_pool.hpp"
+#include "scope_exit.hpp"
 #include "server.hpp"
-#include "client.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
-namespace tests {
+////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-void run_tests()
+void server::listener()
 {
-    locale_traits_test();
-    cdc512_test();
-    rand_test();
-    thread_pool_test();
-    indexer_test();
-    tracker_test();
-	client_test();
-	server_test();
+    while( !shutdown_ ) {
+        if( !server_->isListening() )
+            if( !server_->listen(QHostAddress::Any, 65535) )
+                qDebug() << server_->errorString();
+
+        if( server_->waitForNewConnection(-1) )
+            pool_->enqueue(&server::worker, this, server_->nextPendingConnection());
+    }
 }
 //------------------------------------------------------------------------------
-} // namespace tests
+void server::worker(QTcpSocket * socket)
+{
+    if( socket == nullptr )
+        return;
+
+    QPointer<QTcpSocket> sock(socket);
+
+    at_scope_exit(
+        sock->disconnectFromHost();
+        sock->waitForDisconnected(100);
+        sock->close();
+    );
+}
+//------------------------------------------------------------------------------
+void server::startup()
+{
+    shutdown_ = false;
+    server_ = new QTcpServer;
+    pool_.reset(new thread_pool);
+    thread_.reset(new std::thread(&server::listener, this));
+}
+//------------------------------------------------------------------------------
+void server::shutdown()
+{
+    if( thread_ == nullptr )
+        return;
+
+    std::unique_lock<std::mutex> lk(mtx_);
+    shutdown_ = true;
+    lk.unlock();
+    cv_.notify_one();
+
+    server_->close();
+    thread_->join();
+    thread_ = nullptr;
+    server_ = nullptr;
+    pool_ = nullptr;
+}
 //------------------------------------------------------------------------------
 } // namespace homeostas
 //------------------------------------------------------------------------------

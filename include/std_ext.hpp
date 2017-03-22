@@ -30,27 +30,31 @@
 #include "config.h"
 //------------------------------------------------------------------------------
 #include <algorithm>
-#if __GNUC__ < 5
 #include <sstream>
-#endif
 #include <QtDebug>
 //------------------------------------------------------------------------------
 namespace std {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-class qdbgstream : public stringstream {
-    private:
-        QDebug & qdbg_;
+class qdbgbuf : public stringbuf {
     public:
-        qdbgstream() : qdbg_(qDebug().nospace().noquote()) {}
+        qdbgbuf() {}
 
-        qdbgstream & flush() {
-            qdbg_ << QString::fromStdString(str());
+        virtual int sync() {
+            // add this->str() to database here
+            // (optionally clear buffer afterwards)
+            qDebug().nospace().noquote() << QString::fromStdString(this->str());
+            this->str(string());
+            return 0;
         }
 };
 //------------------------------------------------------------------------------
-extern thread_local qdbgstream qerr;
+extern ostream qerr;
+//------------------------------------------------------------------------------
+inline ostream & operator << (ostream & os, const std::exception & e) {
+    return os << e.what();
+}
 //------------------------------------------------------------------------------
 template <typename T, typename T1, typename T2, typename T3> inline
 T str_replace(const T1 & subject, const T2 & search, const T3 & replace) {
@@ -121,6 +125,39 @@ template <typename T> inline std::string to_string(const T & v) {
 }
 //------------------------------------------------------------------------------
 #endif
+//------------------------------------------------------------------------------
+inline size_t ihash(const char * val) {
+    register size_t h = 0;
+
+    while( *val != '\0' ) {
+        h += *val++;
+        h += h << 9;
+        h ^= h >> 5;
+    }
+
+    h += h << 3;
+    h ^= h >> 10;
+    h += h << 14;
+
+    return h;
+}
+//------------------------------------------------------------------------------
+template <typename H, typename InputIt> inline
+H ihash(InputIt first, InputIt last) {
+    register H h = 0;
+
+    while( first != last ) {
+        h += *first++;
+        h += h << 9;
+        h ^= h >> 5;
+    }
+
+    h += h << 3;
+    h ^= h >> 10;
+    h += h << 14;
+
+    return h;
+}
 //------------------------------------------------------------------------------
 } // namespace std
 //------------------------------------------------------------------------------

@@ -27,7 +27,7 @@
 //------------------------------------------------------------------------------
 #include "cdc512.hpp"
 //------------------------------------------------------------------------------
-namespace spacenet {
+namespace homeostas {
 //------------------------------------------------------------------------------
 namespace tests {
 //------------------------------------------------------------------------------
@@ -49,7 +49,7 @@ void cdc512_test()
 		ctx1.update(t, sizeof(t));
 		ctx1.finish();
 
-        //std::cerr << (s = ctx1.to_string()) << std::endl;
+        //std::qerr << (s = ctx1.to_string()) << std::endl;
 
 		t[3] ^= 0x40;
 
@@ -58,7 +58,7 @@ void cdc512_test()
 		ctx2.update(t, sizeof(t));
 		ctx2.finish();
 
-        //std::cerr << (s = ctx2.to_string()) << std::endl;
+        //std::qerr << (s = ctx2.to_string()) << std::endl;
 		
         if( ctx1.to_string() != "8F0A-7D38-2EE0-C97C-C037-2EFF-B6ED-6040-FE33-FD1E-F0B4-0D6D-BDCF-22B3-5315-C1EA-9287-B14F-861F-8DBF-577C-94EA-3AF6-AEC2-3796-CCE7-A544-36D2-AFE0-E838-F713-1E44" )
 			throw std::runtime_error("bad cdc512 implementation");
@@ -67,17 +67,17 @@ void cdc512_test()
 			throw std::runtime_error("bad cdc512 implementation");
 	}
     catch (const std::exception & e) {
-        std::cerr << e.what() << std::endl;
+        std::qerr << e << std::endl;
         fail = true;
     }
     catch (...) {
 		fail = true;
 	}
 
-    std::cerr << "cdc512 test " << (fail ? "failed" : "passed") << std::endl;
+    std::qerr << "cdc512 test " << (fail ? "failed" : "passed") << std::endl;
 }
 //------------------------------------------------------------------------------
 } // namespace tests
 //------------------------------------------------------------------------------
-} // namespace spacenet
+} // namespace homeostas
 //------------------------------------------------------------------------------

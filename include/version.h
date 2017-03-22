@@ -1,7 +1,7 @@
 #ifndef VERSION_H_INCLUDED
 #define VERSION_H_INCLUDED
 
-namespace spacenet{
+namespace homeostas{
 	
 	//Date Version Types
 	static const char VERSION_DATE[] = "03";

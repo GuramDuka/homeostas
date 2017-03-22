@@ -29,59 +29,62 @@
 //------------------------------------------------------------------------------
 #include "config.h"
 //------------------------------------------------------------------------------
+#include <memory>
 #include <thread>
 #include <mutex>
-#include <chrono>
 #include <atomic>
 #include <condition_variable>
 //------------------------------------------------------------------------------
 #include "indexer.hpp"
 //------------------------------------------------------------------------------
-namespace spacenet {
+namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 class directory_tracker {
     private:
-        string dir_user_defined_name_;
-        string dir_path_name_;
-        string db_name_;
-        string db_path_;
-        string db_path_name_;
+        std::string dir_user_defined_name_;
+        std::string dir_path_name_;
+        std::string db_name_;
+        std::string db_path_;
+        std::string db_path_name_;
 
-        string error_;
+        std::string error_;
         std::unique_ptr<std::thread> thread_;
         std::mutex mtx_;
         std::condition_variable cv_;
         bool shutdown_;
 
         void worker();
-
     protected:
     public:
         ~directory_tracker() {
             shutdown();
         }
 
-        const string & dir_user_defined_name() const {
+        const auto & dir_user_defined_name() const {
             return dir_user_defined_name_;
         }
 
-        directory_tracker & dir_user_defined_name(const string & dir_user_defined_name) {
+        auto & dir_user_defined_name(const std::string & dir_user_defined_name) {
             dir_user_defined_name_ = dir_user_defined_name;
             return *this;
         }
 
-        const string & dir_path_name() const {
+        const auto & dir_path_name() const {
             return dir_path_name_;
         }
 
-        directory_tracker & dir_path_name(const string & dir_path_name) {
+        auto & dir_path_name(const std::string & dir_path_name) {
             dir_path_name_ = dir_path_name;
             return *this;
         }
 
-        void run();
+        bool started() const {
+            return thread_ != nullptr;
+        }
+
+        void startup();
         void shutdown();
 };
 //------------------------------------------------------------------------------
@@ -91,7 +94,7 @@ void tracker_test();
 //------------------------------------------------------------------------------
 } // namespace tests
 //------------------------------------------------------------------------------
-} // namespace spacenet
+} // namespace homeostas
 //------------------------------------------------------------------------------
 #endif // TRACKER_HPP_INCLUDED
 //------------------------------------------------------------------------------

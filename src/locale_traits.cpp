@@ -28,16 +28,7 @@
 //------------------------------------------------------------------------------
 #include "locale_traits.hpp"
 //------------------------------------------------------------------------------
-namespace spacenet {
-//------------------------------------------------------------------------------
-#if __GNUC__ >= 5 || _MSC_VER
-//------------------------------------------------------------------------------
-template <> thread_local const std::collate<char> * locale_traits<char>::coll =
-	&std::use_facet<std::collate<char>>(std::locale());
-//------------------------------------------------------------------------------
-static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-//------------------------------------------------------------------------------
-#endif
+namespace homeostas {
 //------------------------------------------------------------------------------
 std::wstring str2wstr(const std::string & str)
 {
@@ -65,8 +56,6 @@ std::wstring str2wstr(const std::string & str)
             throw std::range_error("Failed converting UTF-8 string to UTF-16");
 
         return buffer;
-#elif __GNUC__ >= 5
-        return converter.from_bytes(str);
 #else
         throw std::range_error("Not implemented");
 #endif
@@ -84,62 +73,5 @@ std::wstring str2wstr(const std::string & str)
     }
 }
 //------------------------------------------------------------------------------
-#if __GNUC__ >= 5 || _MSC_VER
-//------------------------------------------------------------------------------
-std::string wstr2str(const std::wstring & str)
-{
-    return converter.to_bytes(str);
-}
-//------------------------------------------------------------------------------
-#endif
-//------------------------------------------------------------------------------
-#if _WIN32 && (__GNUC__ >= 5 || _MSC_VER)
-//------------------------------------------------------------------------------
-std::string str2utf(const string & str)
-{
-    return converter.to_bytes(str.c_str());
-}
-//------------------------------------------------------------------------------
-string utf2str(const std::string & str)
-{
-    try {
-        size_t sz = str.size();
-
-        if( sz > INT_MAX )
-            throw std::range_error("String is too big");
-
-        size_t charsNeeded = MultiByteToWideChar(
-            CP_UTF8, 0, str.c_str(), int(sz), NULL, 0);
-
-        if( charsNeeded == 0 )
-            throw std::range_error("Failed converting UTF-8 string to UTF-16");
-
-        string buffer;
-
-        buffer.resize(charsNeeded);
-
-        int charsConverted = MultiByteToWideChar(
-            CP_UTF8, 0, str.c_str(), int(sz), &buffer[0], int(buffer.size()));
-
-        if( charsConverted == 0 )
-            throw std::range_error("Failed converting UTF-8 string to UTF-16");
-
-        return buffer;
-    }
-    catch( std::range_error & ) {
-        size_t length = str.length();
-        string result;
-
-        result.reserve(length);
-
-        for( auto c : str )
-            result.push_back(c);
-
-        return result;
-    }
-}
-//------------------------------------------------------------------------------
-#endif
-//------------------------------------------------------------------------------
-} // namespace spacenet
+} // namespace homeostas
 //------------------------------------------------------------------------------

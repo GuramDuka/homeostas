@@ -1,4 +1,4 @@
-QT += qml quick
+QT += core network qml quick
 
 CONFIG += c++14
 
@@ -81,7 +81,12 @@ SOURCES += \
     ../tests/all_tests.cpp \
     ../src/port.cpp \
     ../src/qobjects.cpp \
-    ../src/std_ext.cpp
+    ../src/std_ext.cpp \
+    ../src/client.cpp \
+    ../src/server.cpp \
+    ../tests/client_test.cpp \
+    ../tests/server_test.cpp \
+    ../tests/thread_pool_test.cpp
 
 HEADERS += \
     ../include/cdc512.hpp \
@@ -98,10 +103,15 @@ HEADERS += \
     ../include/tracker.hpp \
     ../include/rand.hpp \
     ../include/port.hpp \
-    ../include/qobjects.hpp
+    ../include/qobjects.hpp \
+    ../include/client.hpp \
+    ../include/server.hpp \
+    ../include/thread_pool.hpp
 
 INCLUDEPATH += .
 INCLUDEPATH += ../include
+
+RC_FILE = ..//homeostas.rc
 
 RESOURCES += ../src/qml/qml.qrc
 
@@ -126,4 +136,7 @@ DEFINES += QT_DEPRECATED_WARNINGS
 qnx: target.path = /tmp/$${TARGET}/bin
 else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
+
+DISTFILES += \
+    ../homeostas.rc
 

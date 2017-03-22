@@ -31,18 +31,18 @@
 #pragma execution_character_set("utf-8")
 #endif
 //------------------------------------------------------------------------------
-#if _WIN32
-// Implies UTF-16 encoding.
-#define CPPX_WITH_SYSCHAR_PREFIX( lit ) L##lit
-#else
-// Implies UTF-8 encoding.
-#   if __GNUC__ >= 5 || _MSC_VER
-#       define CPPX_WITH_SYSCHAR_PREFIX( lit ) u8##lit
-#   else
-#       define CPPX_WITH_SYSCHAR_PREFIX( lit ) lit
-#   endif
-#endif
-#define CPPX_U CPPX_WITH_SYSCHAR_PREFIX
+//#if _WIN32
+//// Implies UTF-16 encoding.
+//#define CPPX_WITH_SYSCHAR_PREFIX( lit ) L##lit
+//#else
+//// Implies UTF-8 encoding.
+//#   if __GNUC__ >= 5 || _MSC_VER
+//#       define CPPX_WITH_SYSCHAR_PREFIX( lit ) u8##lit
+//#   else
+//#       define CPPX_WITH_SYSCHAR_PREFIX( lit ) lit
+//#   endif
+//#endif
+//#define CPPX_U CPPX_WITH_SYSCHAR_PREFIX
 //------------------------------------------------------------------------------
 #if !defined(_WIN32)
 #include <unistd.h>
@@ -384,12 +384,12 @@ static __inline__ uint64_t le64dec(const void *pp)
 #include <cstdint>
 #include <future>
 //------------------------------------------------------------------------------
-namespace spacenet {
+namespace homeostas {
 struct leave_uninitialized_type {};
 constexpr const leave_uninitialized_type leave_uninitialized = {};
 }
 //------------------------------------------------------------------------------
-namespace spacenet { namespace tests { void run_tests(); }}
+namespace homeostas { namespace tests { void run_tests(); }}
 //------------------------------------------------------------------------------
 #endif
 //------------------------------------------------------------------------------

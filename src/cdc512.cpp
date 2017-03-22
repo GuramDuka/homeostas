@@ -34,7 +34,7 @@
 #include "port.hpp"
 #endif
 //------------------------------------------------------------------------------
-namespace spacenet {
+namespace homeostas {
 //------------------------------------------------------------------------------
 void cdc512_data::shuffle()
 {
@@ -149,17 +149,28 @@ std::string cdc512::to_string() const
 	return s.str();
 }
 //---------------------------------------------------------------------------
-std::string cdc512::to_short_string() const
+std::string cdc512::to_short_string(const char * abc, char delimiter, size_t interval) const
 {
     std::string s;
-    //constexpr const char * abc = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    constexpr const char abc[] = "._,=~!@#$%^&-+0123456789abcdefghijklmnopqrstuvwxyz";
+
+    if( abc == nullptr )
+        abc = "._,=~!@#$%^&-+0123456789abcdefghijklmnopqrstuvwxyz";
+
+    size_t l = slen(abc), i = 0;
 
     for( auto a : digest64 )
         while( a ) {
-            s.push_back(abc[a % (sizeof(abc) - 1)]);
-            a /= sizeof(abc) - 1;
+            s.push_back(abc[a % l]);
+            a /= l;
+
+            if( delimiter != '\0' && interval != 0 && ++i == interval ) {
+                s.push_back(delimiter);
+                i = 0;
+            }
         }
+
+    if( delimiter != '\0' && interval != 0 && s.back() == delimiter )
+        s.pop_back();
 
     return s;
 }
@@ -210,5 +221,5 @@ std::string cdc512::generate_prime()
 //---------------------------------------------------------------------------
 #endif
 //---------------------------------------------------------------------------
-} // namespace spacenet
+} // namespace homeostas
 //------------------------------------------------------------------------------

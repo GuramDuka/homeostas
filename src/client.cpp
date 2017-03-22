@@ -22,34 +22,41 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
-#include <iostream>
-//------------------------------------------------------------------------------
-#include "locale_traits.hpp"
-#include "cdc512.hpp"
-#include "rand.hpp"
-#include "indexer.hpp"
-#include "tracker.hpp"
-#include "thread_pool.hpp"
 #include "server.hpp"
 #include "client.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
-namespace tests {
+////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-void run_tests()
+void client::worker()
 {
-    locale_traits_test();
-    cdc512_test();
-    rand_test();
-    thread_pool_test();
-    indexer_test();
-    tracker_test();
-	client_test();
-	server_test();
+    socket_->connectToHost(QHostAddress::LocalHost, 65535);
+    socket_->waitForConnected(-1);
 }
 //------------------------------------------------------------------------------
-} // namespace tests
+void client::startup()
+{
+    shutdown_ = false;
+    socket_ = new QTcpSocket;
+    thread_.reset(new std::thread(&client::worker, this));
+}
+//------------------------------------------------------------------------------
+void client::shutdown()
+{
+    if( thread_ == nullptr )
+        return;
+
+    std::unique_lock<std::mutex> lk(mtx_);
+    shutdown_ = true;
+    lk.unlock();
+    cv_.notify_one();
+
+    socket_->close();
+    thread_->join();
+    thread_ = nullptr;
+    socket_ = nullptr;
+}
 //------------------------------------------------------------------------------
 } // namespace homeostas
 //------------------------------------------------------------------------------

@@ -26,7 +26,7 @@
 //------------------------------------------------------------------------------
 #include "rand.hpp"
 //------------------------------------------------------------------------------
-namespace spacenet {
+namespace homeostas {
 //------------------------------------------------------------------------------
 namespace tests {
 //------------------------------------------------------------------------------
@@ -35,21 +35,21 @@ void rand_test()
     bool fail = false;
 
     try {
-        //rand<> r;
-        //r.get();
+        rand<> r;
+        r.get();
     }
     catch (const std::exception & e) {
-        std::cerr << e.what() << std::endl;
+        std::qerr << e << std::endl;
         fail = true;
     }
     catch (...) {
         fail = true;
     }
 
-    std::cerr << "rand test " << (fail ? "failed" : "passed") << std::endl;
+    std::qerr << "rand test " << (fail ? "failed" : "passed") << std::endl;
 }
 //------------------------------------------------------------------------------
 } // namespace tests
 //------------------------------------------------------------------------------
-} // namespace spacenet
+} // namespace homeostas
 //------------------------------------------------------------------------------

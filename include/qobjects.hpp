@@ -22,52 +22,123 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
-#ifndef CONNECTIONS_HPP_INCLUDED
-#define CONNECTIONS_HPP_INCLUDED
+#ifndef QOBJECTS_HPP_INCLUDED
+#define QOBJECTS_HPP_INCLUDED
 //------------------------------------------------------------------------------
 #pragma once
 //------------------------------------------------------------------------------
+#include "config.h"
+//------------------------------------------------------------------------------
 #include <QObject>
+#include <QString>
 #include <QDateTime>
 #include <QVariant>
+#include <QNetworkInterface>
+//------------------------------------------------------------------------------
+#include "tracker.hpp"
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+class QHomeostas : public QObject {
+        Q_OBJECT
+        Q_PROPERTY(QString uniqueId READ uniqueId WRITE setUniqueId)
+    public:
+        explicit QHomeostas(QObject *parent = 0) : QObject(parent) {}
+
+        QString uniqueId() const {
+            return uniqueId_;
+        }
+
+        void setUniqueId(const QString & uniqueId) {
+            uniqueId_ = uniqueId;
+        }
+    signals:
+    public slots:
+        QVariant getVar(const QString & varName);
+        void setVar(const QString & varName, const QVariant & val);
+        QString newUniqueId();
+    private:
+        std::unique_ptr<sqlite3pp::database> db_;
+        QString uniqueId_;
+};
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 class QDirectoryTracker : public QObject {
 		Q_OBJECT
-        Q_PROPERTY(QString author READ author WRITE setAuthor NOTIFY authorChanged)
-        Q_PROPERTY(QDateTime creationDate READ creationDate WRITE setCreationDate NOTIFY creationDateChanged)
+        //Q_PROPERTY(QString author READ author WRITE setAuthor NOTIFY authorChanged)
+        //Q_PROPERTY(QDateTime creationDate READ creationDate WRITE setCreationDate NOTIFY creationDateChanged)
+        Q_PROPERTY(
+            QString directoryUserDefinedName
+            READ directoryUserDefinedName
+            WRITE setDirectoryUserDefinedName)
+        Q_PROPERTY(
+            QString directoryPathName
+            READ directoryPathName
+            WRITE setDirectoryPathName)
     public:
-        explicit QDirectoryTracker(QObject *parent = 0);
+        explicit QDirectoryTracker(QObject *parent = 0) : QObject(parent) {}
 
-        QString author() const {
-            return author_;
+        //QString author() const {
+        //    return author_;
+        //}
+
+        //void setAuthor(const QString &author) {
+        //    author_ = author;
+        //    authorChanged();
+        //}
+
+        //QDateTime creationDate() const {
+        //    return creationDate_;
+        //}
+
+        //void setCreationDate(const QDateTime &creationDate) {
+        //    creationDate_ = creationDate;
+        //    creationDateChanged();
+        //}
+
+        QString directoryUserDefinedName() const {
+            return QString::fromStdString(dt_.dir_user_defined_name());
         }
 
-        void setAuthor(const QString &author) {
-            author_ = author;
-            authorChanged();
+        void setDirectoryUserDefinedName(const QString & directoryUserDefinedName) {
+            auto started = dt_.started();
+
+            dt_.shutdown();
+            dt_.dir_user_defined_name(directoryUserDefinedName.toStdString());
+
+            if( started )
+                dt_.startup();
         }
 
-        QDateTime creationDate() const {
-            return creationDate_;
+        QString directoryPathName() const {
+            return QString::fromStdString(dt_.dir_path_name());
         }
 
-        void setCreationDate(const QDateTime &creationDate) {
-            creationDate_ = creationDate;
-            creationDateChanged();
+        void setDirectoryPathName(const QString & directoryPathName) {
+            auto started = dt_.started();
+
+            dt_.shutdown();
+            dt_.dir_path_name(directoryPathName.toStdString());
+
+            if( started )
+                dt_.startup();
         }
 
     signals:
-        void authorChanged();
-        void creationDateChanged();
+        //void authorChanged();
+        //void creationDateChanged();
 
     public slots:
-        void doSend(int count);
+        //void doSend(int count);
+        void startTracker();
+        void stopTracker();
     private:
+        homeostas::directory_tracker dt_;
+
         QString author_;
         QDateTime creationDate_;
 };
 //------------------------------------------------------------------------------
-#endif // CONNECTIONS_HPP_INCLUDED
+#endif // QOBJECTS_HPP_INCLUDED
 //------------------------------------------------------------------------------

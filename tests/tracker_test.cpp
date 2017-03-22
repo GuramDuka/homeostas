@@ -26,7 +26,7 @@
 //------------------------------------------------------------------------------
 #include "tracker.hpp"
 //------------------------------------------------------------------------------
-namespace spacenet {
+namespace homeostas {
 //------------------------------------------------------------------------------
 namespace tests {
 //------------------------------------------------------------------------------
@@ -37,23 +37,23 @@ void tracker_test()
 	try {
         directory_tracker dt;
 
-        dt.dir_user_defined_name(CPPX_U("hiew"));
-        dt.dir_path_name(CPPX_U("c:\\hiew"));
-        dt.run();
+        dt.dir_user_defined_name("hiew");
+        dt.dir_path_name("c:\\hiew");
+        dt.startup();
         dt.shutdown();
 	}
     catch (const std::exception & e) {
-        std::cerr << e.what() << std::endl;
+        std::qerr << e << std::endl;
         fail = true;
     }
     catch (...) {
 		fail = true;
 	}
 
-    std::cerr << "tracker test " << (fail ? "failed" : "passed") << std::endl;
+    std::qerr << "tracker test " << (fail ? "failed" : "passed") << std::endl;
 }
 //------------------------------------------------------------------------------
 } // namespace tests
 //------------------------------------------------------------------------------
-} // namespace spacenet
+} // namespace homeostas
 //------------------------------------------------------------------------------

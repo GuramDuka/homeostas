@@ -22,34 +22,66 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
-#include <iostream>
+#ifndef SERVER_HPP_INCLUDED
+#define SERVER_HPP_INCLUDED
 //------------------------------------------------------------------------------
-#include "locale_traits.hpp"
-#include "cdc512.hpp"
-#include "rand.hpp"
-#include "indexer.hpp"
-#include "tracker.hpp"
+#pragma once
+//------------------------------------------------------------------------------
+#include "config.h"
+//------------------------------------------------------------------------------
+#include <memory>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <condition_variable>
+#include <QPointer>
+#include <QTcpSocket>
+#include <QTcpServer>
+#include <QHostAddress>
+//------------------------------------------------------------------------------
 #include "thread_pool.hpp"
-#include "server.hpp"
-#include "client.hpp"
+#include "tracker.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+class server {
+    private:
+        QPointer<QTcpServer> server_;
+        std::unique_ptr<std::thread> thread_;
+        std::unique_ptr<thread_pool> pool_;
+        std::mutex mtx_;
+        std::condition_variable cv_;
+        bool shutdown_;
+
+        void listener();
+        void worker(QTcpSocket * socket);
+    protected:
+        struct connection {
+            std::unique_ptr<QTcpSocket> socket_;
+        };
+
+    public:
+        ~server() {
+            shutdown();
+        }
+
+        bool started() const {
+            return thread_ != nullptr;
+        }
+
+        void startup();
+        void shutdown();
+};
+//------------------------------------------------------------------------------
 namespace tests {
 //------------------------------------------------------------------------------
-void run_tests()
-{
-    locale_traits_test();
-    cdc512_test();
-    rand_test();
-    thread_pool_test();
-    indexer_test();
-    tracker_test();
-	client_test();
-	server_test();
-}
+void server_test();
 //------------------------------------------------------------------------------
 } // namespace tests
 //------------------------------------------------------------------------------
 } // namespace homeostas
+//------------------------------------------------------------------------------
+#endif // SERVER_HPP_INCLUDED
 //------------------------------------------------------------------------------

@@ -36,22 +36,21 @@
 #include <string>
 #include <forward_list>
 //------------------------------------------------------------------------------
-//#include "sqlite/sqlite_modern_cpp.h"
 #include "sqlite3pp/sqlite3pp.h"
 #include "locale_traits.hpp"
 //------------------------------------------------------------------------------
-namespace spacenet {
+namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 struct directory_reader {
     std::function<void()> manipulator_;
 
-    string path_;
-    string path_name_;
-    string name_;
-    string mask_;
-    string exclude_;
+    std::string path_;
+    std::string path_name_;
+    std::string name_;
+    std::string mask_;
+    std::string exclude_;
     uintptr_t level_ = 0;
     uintptr_t max_level_ = 0;
 
@@ -74,7 +73,7 @@ struct directory_reader {
     bool abort_ = false;
 
     template <typename Manipul>
-    void read(const string & root_path, const Manipul & ml) {
+    void read(const std::string & root_path, const Manipul & ml) {
         this->manipulator_ = [&] {
             ml();
         };
@@ -82,7 +81,7 @@ struct directory_reader {
         read(root_path);
     }
 
-    void read(const string & root_path);
+    void read(const std::string & root_path);
 };
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
@@ -103,7 +102,7 @@ class directory_indexer {
 
         void reindex(
             sqlite3pp::database & db,
-            const string & dir_path_name,
+            const std::string & dir_path_name,
             bool * p_shutdown = nullptr);
 };
 //------------------------------------------------------------------------------
@@ -113,7 +112,7 @@ void indexer_test();
 //------------------------------------------------------------------------------
 } // namespace tests
 //------------------------------------------------------------------------------
-} // namespace spacenet
+} // namespace homeostas
 //------------------------------------------------------------------------------
 #endif // INDEXER_HPP_INCLUDED
 //------------------------------------------------------------------------------

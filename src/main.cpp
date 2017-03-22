@@ -22,19 +22,20 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
+#include "config.h"
+//------------------------------------------------------------------------------
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
-#include <QtDebug>
+#include <QFontDatabase>
 //------------------------------------------------------------------------------
 #include "config.h"
 #include "qobjects.hpp"
 //------------------------------------------------------------------------------
 int main(int argc,char ** argv)
 {
-    qSetMessagePattern("[%{type}] (%{file}:%{line}) - %{message}");
-
-    spacenet::tests::run_tests();
+    //qSetMessagePattern("[%{type}] %{file}, %{line}: %{message}");
+    homeostas::tests::run_tests();
 
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QGuiApplication app(argc, argv);
@@ -43,10 +44,14 @@ int main(int argc,char ** argv)
 
     QQmlApplicationEngine engine;
 
-    //QDirectoryTracker directory_tracker;
-    //engine.rootContext()->setContextProperty("directoryTracker", &directory_tracker);
+    QHomeostas homeostas;
+    engine.rootContext()->setContextProperty("homeostas", &homeostas);
 
     engine.load(QUrl(QLatin1String("qrc:/main.qml")));
+
+    QFontDatabase::addApplicationFont("qrc:/digital-7.ttf");
+
+    qDebug() << homeostas.newUniqueId();
 
     return app.exec();
 }

@@ -22,34 +22,57 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
-#include <iostream>
+#ifndef CLIENT_HPP_INCLUDED
+#define CLIENT_HPP_INCLUDED
 //------------------------------------------------------------------------------
-#include "locale_traits.hpp"
-#include "cdc512.hpp"
-#include "rand.hpp"
-#include "indexer.hpp"
+#pragma once
+//------------------------------------------------------------------------------
+#include "config.h"
+//------------------------------------------------------------------------------
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <condition_variable>
+#include <QPointer>
+#include <QTcpSocket>
+#include <QHostAddress>
+//------------------------------------------------------------------------------
 #include "tracker.hpp"
-#include "thread_pool.hpp"
-#include "server.hpp"
-#include "client.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+class client : protected QTcpSocket {
+    private:
+        QPointer<QTcpSocket> socket_;
+        std::unique_ptr<std::thread> thread_;
+        std::mutex mtx_;
+        std::condition_variable cv_;
+        bool shutdown_;
+
+        void worker();
+    protected:
+    public:
+        ~client() {
+            shutdown();
+        }
+
+        bool started() const {
+            return thread_ != nullptr;
+        }
+
+        void startup();
+        void shutdown();
+};
+//------------------------------------------------------------------------------
 namespace tests {
 //------------------------------------------------------------------------------
-void run_tests()
-{
-    locale_traits_test();
-    cdc512_test();
-    rand_test();
-    thread_pool_test();
-    indexer_test();
-    tracker_test();
-	client_test();
-	server_test();
-}
+void client_test();
 //------------------------------------------------------------------------------
 } // namespace tests
 //------------------------------------------------------------------------------
 } // namespace homeostas
+//------------------------------------------------------------------------------
+#endif // CLIENT_HPP_INCLUDED
 //------------------------------------------------------------------------------

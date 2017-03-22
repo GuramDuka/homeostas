@@ -24,29 +24,28 @@
 //------------------------------------------------------------------------------
 #include <iostream>
 //------------------------------------------------------------------------------
-#include "locale_traits.hpp"
-#include "cdc512.hpp"
-#include "rand.hpp"
-#include "indexer.hpp"
-#include "tracker.hpp"
 #include "thread_pool.hpp"
-#include "server.hpp"
-#include "client.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
 namespace tests {
 //------------------------------------------------------------------------------
-void run_tests()
+void thread_pool_test()
 {
-    locale_traits_test();
-    cdc512_test();
-    rand_test();
-    thread_pool_test();
-    indexer_test();
-    tracker_test();
-	client_test();
-	server_test();
+    bool fail = false;
+
+    try {
+        thread_pool pool;
+    }
+    catch (const std::exception & e) {
+        std::qerr << e << std::endl;
+        fail = true;
+    }
+    catch (...) {
+        fail = true;
+    }
+
+    std::qerr << "thread pool test " << (fail ? "failed" : "passed") << std::endl;
 }
 //------------------------------------------------------------------------------
 } // namespace tests

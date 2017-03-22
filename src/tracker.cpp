@@ -26,12 +26,12 @@
 #include "cdc512.hpp"
 #include "tracker.hpp"
 //------------------------------------------------------------------------------
-namespace spacenet {
+namespace homeostas {
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 void directory_tracker::worker()
 {
-    using namespace std::chrono_literals;
-
     sqlite3pp::database db;
     directory_indexer di;
 
@@ -44,7 +44,7 @@ void directory_tracker::worker()
         sqlite3_enable_shared_cache(1);
 
         db.exceptions(false).connect(
-            str2utf(db_path_name_),
+            db_path_name_,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_SHAREDCACHE
         );
 
@@ -69,15 +69,16 @@ void directory_tracker::worker()
             connect_db();
             di.reindex(db, dir_path_name_, &shutdown_);
         }
-        catch( std::exception & e ) {
-            error_ = utf2str(e.what());
+        catch( const std::exception & e ) {
+            error_ = e.what();
             db.disconnect();
         }
 
         std::unique_lock<std::mutex> lk(mtx_);
 
         auto now = std::chrono::system_clock::now();
-        auto deadline = now + 60s + 100ms;
+        using namespace std::chrono_literals;
+        auto deadline = now + 10s + 10ms;
 
         if( cv_.wait_until(lk, deadline, [&] { return shutdown_; }) )
             break;
@@ -86,39 +87,39 @@ void directory_tracker::worker()
     db.disconnect();
 }
 //------------------------------------------------------------------------------
-void directory_tracker::run()
+void directory_tracker::startup()
 {
     auto remove_forbidden_characters = [] (const auto & s) {
-        string t;
+        std::string t;
 
         for( const auto & c : s )
-            if( (c >= CPPX_U('A') && c <= CPPX_U('Z'))
-                || (c >= CPPX_U('a') && c <= CPPX_U('z'))
-                || (c >= CPPX_U('0') && c <= CPPX_U('9'))
-                || c == CPPX_U('.')
-                || c == CPPX_U('_')
-                || c == CPPX_U('-') )
+            if( (c >= 'A' && c <= 'Z')
+                || (c >= 'a' && c <= 'z')
+                || (c >= '0' && c <= '9')
+                || c == '.'
+                || c == '_'
+                || c == '-' )
                 t.push_back(c);
 
         return t;
     };
 
     auto make_digest_name = [] (const auto & s) {
-        string t;
+        std::string t;
 
         cdc512 ctx(s.cbegin(), s.cend());
 
         if( slen(t.c_str()) > 13 )
             t = t.substr(0, 13);
 
-        t.push_back(CPPX_U('-'));
-        t += utf2str(ctx.to_short_string());
+        t.push_back('-');
+        t += ctx.to_short_string();
 
         return t;
     };
 
     auto make_name = [&] (const auto & s) {
-        string t = remove_forbidden_characters(s);
+        std::string t = remove_forbidden_characters(s);
 
         if( t != s )
             t = make_digest_name(t);
@@ -126,9 +127,9 @@ void directory_tracker::run()
         return t;
     };
 
-    db_path_ = home_path(false) + CPPX_U(".spacenet");
+    db_path_ = home_path(false) + ".homeostas";
     db_name_ = make_name(dir_user_defined_name_.empty() ? dir_path_name_ : dir_user_defined_name_)
-        + CPPX_U(".sqlite");
+        + ".sqlite";
     db_path_name_ = db_path_ + path_delimiter + db_name_;
 
     if( access(db_path_, F_OK) != 0 && errno == ENOENT )
@@ -143,11 +144,14 @@ void directory_tracker::shutdown()
     if( thread_ == nullptr )
         return;
 
+    std::unique_lock<std::mutex> lk(mtx_);
     shutdown_ = true;
+    lk.unlock();
     cv_.notify_one();
+
     thread_->join();
     thread_ = nullptr;
 }
 //------------------------------------------------------------------------------
-} // namespace spacenet
+} // namespace homeostas
 //------------------------------------------------------------------------------

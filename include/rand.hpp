@@ -58,8 +58,9 @@
 #pragma once
 //------------------------------------------------------------------------------
 #include "config.h"
+#include "std_ext.hpp"
 //------------------------------------------------------------------------------
-namespace spacenet {
+namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
@@ -67,7 +68,12 @@ template <int ALPHA = 8, class T = uint32_t>
 class rand {
 public:
     typedef uint8_t byte;
+    typedef T value_type;
     enum { N = (1 << ALPHA) };
+
+    rand() {
+        rc_.randcnt = 0;
+    }
 
     T get() {
         if( rc_.randcnt == 0 ){
@@ -88,6 +94,8 @@ public:
 
         randinit(&rc_, true);
     }
+
+    enum { srand_size = sizeof(T) * N };
 
     void srand(const void * data, size_t count) {
         auto l = count < sizeof(rc_.randrsl) ? count : sizeof(rc_.randrsl);
@@ -304,7 +312,7 @@ void rand_test();
 //------------------------------------------------------------------------------
 } // namespace tests
 //------------------------------------------------------------------------------
-} // namespace spacenet
+} // namespace homeostas
 //------------------------------------------------------------------------------
 #endif // RAND_HPP_INCLUDED
 //------------------------------------------------------------------------------

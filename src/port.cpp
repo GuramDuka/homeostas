@@ -99,17 +99,17 @@ int clock_gettime(int /*dummy*/, struct timespec * ct)
 //------------------------------------------------------------------------------
 #endif
 //------------------------------------------------------------------------------
-namespace spacenet {
+namespace homeostas {
 //------------------------------------------------------------------------------
-const string::value_type path_delimiter[] =
+const char path_delimiter[] =
 #if _WIN32
-    CPPX_U("\\")
+    "\\"
 #else
-    CPPX_U("/")
+    "/"
 #endif
 ;
 //------------------------------------------------------------------------------
-int mkdir(const string & path_name)
+int mkdir(const std::string & path_name)
 {
     int err;
 
@@ -118,7 +118,7 @@ int mkdir(const string & path_name)
 
         err = 0;
 #if _WIN32
-        r = CreateDirectoryW(path_name.c_str(), NULL) == FALSE;
+        r = CreateDirectoryW(QString::fromStdString(path_name).toStdWString().c_str(), NULL) == FALSE;
         if( r ) {
             err = GetLastError();
             if( err == ERROR_ALREADY_EXISTS ) {
@@ -143,10 +143,10 @@ int mkdir(const string & path_name)
     if( make() ) {
         auto i = path_name.rfind(path_delimiter[0]);
 
-        if( i == string::npos )
+        if( i == std::string::npos )
             throw std::runtime_error("Error create directory");
 
-        mkdir(string(path_name, 0, i));
+        mkdir(std::string(path_name, 0, i));
 
         if( make() )
             throw std::runtime_error("Error create directory");
@@ -155,40 +155,37 @@ int mkdir(const string & path_name)
     return err;
 }
 //------------------------------------------------------------------------------
-int access(const string & path_name, int mode)
+int access(const std::string & path_name, int mode)
 {
 #if _WIN32
-    return _waccess(path_name.c_str(), mode);
+    return _waccess(QString::fromStdString(path_name).toStdWString().c_str(), mode);
 #else
     return access(path_name.c_str(), mode);
 #endif
 }
 //------------------------------------------------------------------------------
-#if _WIN32
-const wchar_t *
-#else
-const char *
-#endif
-getenv(const string & var_name)
+std::string getenv(const std::string & var_name)
 {
 #if _WIN32
-    return _wgetenv(var_name.c_str());
+    return QString::fromWCharArray(
+        _wgetenv(QString::fromStdString(var_name).toStdWString().c_str())
+    ).toStdString();
 #else
     return getenv(var_name.c_str());
 #endif
 }
 //------------------------------------------------------------------------------
-string home_path(bool no_back_slash)
+std::string home_path(bool no_back_slash)
 {
-    string s;
+    std::string s;
 #if _WIN32
-    s = _wgetenv(L"HOMEDRIVE");
-    s += _wgetenv(L"HOMEPATH");
+    s = QString::fromWCharArray(_wgetenv(L"HOMEDRIVE")).toStdString()
+        + QString::fromWCharArray(_wgetenv(L"HOMEPATH")).toStdString();
 
-    if( _waccess(s.c_str(), R_OK | W_OK | X_OK) != 0 )
-        s = _wgetenv(L"USERPROFILE");
+    if( access(s, R_OK | W_OK | X_OK) != 0 )
+        s = QString::fromWCharArray(_wgetenv(L"USERPROFILE")).toStdString();
 
-    if( _waccess(s.c_str(), R_OK | W_OK | X_OK) != 0 )
+    if( access(s, R_OK | W_OK | X_OK) != 0 )
         throw std::runtime_error("Access denied to user home directory");
 #else
     s = ::getenv("HOME");
@@ -206,17 +203,20 @@ string home_path(bool no_back_slash)
     return s;
 }
 //------------------------------------------------------------------------------
-string temp_path(bool no_back_slash)
+std::string temp_path(bool no_back_slash)
 {
-    string s;
 #if _WIN32
+    std::wstring ws;
+
     DWORD a = GetTempPathW(0, NULL);
 
-    s.resize(a - 1);
+    ws.resize(a - 1);
 
-    GetTempPathW(a, &s[0]);
+    GetTempPathW(a, &ws[0]);
+
+    std::string s = QString::fromStdWString(ws).toStdString();
 #else
-    s = P_tmpdir;
+    std::string s = P_tmpdir;
 #endif
     if( no_back_slash ) {
         if( s.back() == path_delimiter[0] )
@@ -228,16 +228,15 @@ string temp_path(bool no_back_slash)
     return s;
 }
 //------------------------------------------------------------------------------
-string temp_name(string dir, string pfx)
+std::string temp_name(std::string dir, std::string pfx)
 {
     constexpr int MAXTRIES = 10000;
 	static std::atomic_int index;
-    string s;
 
 	if( dir.empty() )
         dir = temp_path(true);
     if( pfx.empty() )
-        pfx = CPPX_U("temp");
+        pfx = "temp";
 
 #if __GNUC__ >= 5 || _MSC_VER
     int pid = _getpid();
@@ -246,46 +245,41 @@ string temp_name(string dir, string pfx)
 #endif
 
     if( access(dir, R_OK | W_OK | X_OK) != 0 )
-        throw std::runtime_error("access denied to directory: " + str2utf(dir));
-
-    size_t l = dir.size() + 1 + pfx.size() + 4 * (sizeof(int) * 3 + 2) + 1;
-	s.resize(l);
+        throw std::runtime_error("access denied to directory: " + dir);
 
 	int try_n = 0;
-	
+    char s[4 * (sizeof(int) * 3 + 2) + 1];
+
 	do {
 		struct timespec ts;
 		clock_gettime(CLOCK_REALTIME, &ts);
+
         int m = int(ts.tv_sec ^ uintptr_t(&s[0]) ^ uintptr_t(&s));
         int n = int(ts.tv_nsec ^ uintptr_t(&s[0]) ^ uintptr_t(&s));
-#if _WIN32
-        _snwprintf(&s[0], l, CPPX_U("%ls\\%ls-%d-%d-%x-%x"),
-#else
-        snprintf(&s[0], l, CPPX_U("%s/%s-%d-%d-%x-%x"),
-#endif
-        dir.c_str(), pfx.c_str(), pid, index.fetch_add(1), m, n);
+
+        snprintf(s, sizeof(s), "-%d-%d-%x-%x", pid, index.fetch_add(1), m, n);
     }
     while( !access(s, F_OK) && try_n++ < MAXTRIES );
 
 	if( try_n >= MAXTRIES )
         throw std::range_error("function temp_name MAXTRIES reached");
 
-    s.resize(slen(s.c_str()));
-
-	return s;
+    return dir + path_delimiter + pfx + s;
 }
 //------------------------------------------------------------------------------
-string get_cwd(bool no_back_slash)
+std::string get_cwd(bool no_back_slash)
 {
 #if _WIN32
     DWORD a = GetCurrentDirectoryW(0, NULL);
 
-    string s;
-    s.resize(a - 1);
+    std::wstring ws;
+    ws.resize(a - 1);
 
-    GetCurrentDirectoryW(a, &s[0]);
+    GetCurrentDirectoryW(a, &ws[0]);
+
+    std::string s = QString::fromStdWString(ws).toStdString();
 #else
-    string s;
+    std::string s;
 
     s.resize(32);
 
@@ -307,7 +301,7 @@ string get_cwd(bool no_back_slash)
         s = ".";
 
     if( !no_back_slash )
-        s += CPPX_U("/");
+        s += "/";
 
 	s.shrink_to_fit();
 #endif
@@ -321,15 +315,15 @@ string get_cwd(bool no_back_slash)
     return s;
 }
 //------------------------------------------------------------------------------
-string path2rel(const string & path, bool no_back_slash)
+std::string path2rel(const std::string & path, bool no_back_slash)
 {
-    string file_path = path;
+    std::string file_path = path;
 
     if( !file_path.empty() ) {
 #if _WIN32
-        file_path = std::str_replace<string>(file_path, CPPX_U("/"), CPPX_U("\\"));
+        file_path = std::str_replace<std::string>(file_path, "/", "\\");
 #else
-        file_path = std::str_replace<string>(file_path, CPPX_U("\\"), CPPX_U("/"));
+        file_path = std::str_replace<std::string>(file_path, "\\", "/");
 #endif
         //file_path = path.find(path_delimiter[0]) == 0 ? path.substr(1) : path;
 
@@ -343,5 +337,5 @@ string path2rel(const string & path, bool no_back_slash)
 	return file_path;
 }
 //------------------------------------------------------------------------------
-} // namespace spacenet
+} // namespace homeostas
 //------------------------------------------------------------------------------

@@ -29,7 +29,7 @@
 #include "port.hpp"
 #include "indexer.hpp"
 //------------------------------------------------------------------------------
-namespace spacenet {
+namespace homeostas {
 //------------------------------------------------------------------------------
 namespace tests {
 //------------------------------------------------------------------------------
@@ -41,13 +41,13 @@ void indexer_test()
 		directory_reader dr;
 
 		struct entry {
-            string name_;
+            std::string name_;
 			decltype(dr.mtime_) mtime_;
 			decltype(dr.fsize_) size_;
 			decltype(dr.is_reg_) is_reg_;
 
 			entry() {}
-            entry(string name, decltype(mtime_) mtime, decltype(size_) fsize, decltype(dr.is_reg_) is_reg) :
+            entry(std::string name, decltype(mtime_) mtime, decltype(size_) fsize, decltype(dr.is_reg_) is_reg) :
 				name_(std::move(name)),
 				mtime_(std::move(mtime)),
 				size_(std::move(fsize)),
@@ -65,33 +65,30 @@ void indexer_test()
 
         dr.read(get_cwd());
 
-#if __GNUC__ >= 5 || _MSC_VER
-        locale_traits<char> comparator;
-
 		std::function<bool (const entry & a, const entry & b)> sorter = [&] (const auto & a, const auto & b) {
 			int r = (a.is_reg_ ? 1 : 0) - (b.is_reg_ ? 1 : 0);
 
 			if( r == 0 )
-				r = comparator.compare(a.name_, b.name_);
+                r = QString::fromStdString(a.name_).compare(QString::fromStdString(b.name_));
 
 			return r < 0;
 		};
 
 		std::sort(lst.begin(), lst.end(), sorter);
-#endif
-		//for( const auto & e : lst )
-		//	std::cout << e.name_ << std::endl;
+
+        for( const auto & e : lst )
+            std::qerr << e.name_ << std::endl;
 
 		directory_indexer di;
-        //string db_name = temp_path(false) + CPPX_U("indexer_test.sqlite");
-        string db_name = temp_name() + CPPX_U(".sqlite");
+        //string db_name = temp_path(false) + "indexer_test.sqlite";
+        std::string db_name = temp_name() + ".sqlite";
 		
 		//sqlite::sqlite_config db_config;
         //db_config.flags = sqlite::OpenFlags::READWRITE | sqlite::OpenFlags::CREATE;
 		//db_config.encoding = sqlite::Encoding::UTF8;
 		//sqlite::database db(db_name, db_config); // ":memory:"
 		//sqlite3_busy_timeout(db.connection().get(), 15000); // milliseconds
-        sqlite3pp::database db(str2utf(db_name));
+        sqlite3pp::database db(db_name);
 
 		sqlite3pp::command pragmas(db, R"EOS(
 			PRAGMA page_size = 4096;
@@ -109,17 +106,17 @@ void indexer_test()
 
 	}
     catch (const std::exception & e) {
-        std::cerr << e.what() << std::endl;
+        std::qerr << e << std::endl;
         fail = true;
     }
     catch (...) {
 		fail = true;
 	}
 
-    std::cerr << "indexer test " << (fail ? "failed" : "passed") << std::endl;
+    std::qerr << "indexer test " << (fail ? "failed" : "passed") << std::endl;
 }
 //------------------------------------------------------------------------------
 } // namespace tests
 //------------------------------------------------------------------------------
-} // namespace spacenet
+} // namespace homeostas
 //------------------------------------------------------------------------------
