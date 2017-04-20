@@ -53,7 +53,9 @@ class directory_tracker {
         std::unique_ptr<std::thread> thread_;
         std::mutex mtx_;
         std::condition_variable cv_;
-        bool shutdown_;
+
+        bool shutdown_ = false;
+        bool oneshot_ = false;
 
         void worker();
     protected:
@@ -77,6 +79,15 @@ class directory_tracker {
 
         auto & dir_path_name(const std::string & dir_path_name) {
             dir_path_name_ = dir_path_name;
+            return *this;
+        }
+
+        const auto & oneshot() const {
+            return oneshot_;
+        }
+
+        auto & oneshot(bool oneshot) {
+            oneshot_ = oneshot;
             return *this;
         }
 

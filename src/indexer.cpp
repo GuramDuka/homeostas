@@ -39,6 +39,18 @@ namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
+#if _WIN32
+static inline auto unpack_FILETIME(FILETIME & ft, uint32_t & nsec)
+{
+    ULARGE_INTEGER q;
+    q.LowPart = ft.dwLowDateTime;
+    q.HighPart = ft.dwHighDateTime;
+    nsec = uint32_t((q.QuadPart % 10000000) * 100); // FILETIME is in units of 100 nsec.
+    constexpr const uint64_t secs_between_epochs = 11644473600; // Seconds between 1.1.1601 and 1.1.1970 */
+    return time_t((q.QuadPart / 10000000) - secs_between_epochs);
+};
+#endif
+//------------------------------------------------------------------------------
 struct file_stat :
 #if _WIN32
 	public _stat64
@@ -46,17 +58,103 @@ struct file_stat :
 	public stat
 #endif
 {
-    file_stat(const std::string & file_name) noexcept {
-		stat(file_name);
+#if _WIN32
+    uint32_t st_atimensec;
+    uint32_t st_ctimensec;
+    uint32_t st_mtimensec;
+#endif
+
+    file_stat(const std::string & file_name) {
+        auto err = stat(file_name);
+        if( err != 0 )
+            throw std::runtime_error(strerror(err));
 	}
 
     int stat(const std::string & file_name) noexcept {
 #if _WIN32
-        return _wstat64(QString::fromStdString(file_name).toStdWString().c_str(), this);
+        auto name = QString::fromStdString(file_name).toStdWString();
+        int err = _wstat64(name.c_str(), this);
+
+        if( err == 0 ) {
+            st_mtimensec = st_ctimensec = st_atimensec = 0;
+
+            auto handle = CreateFileW(
+                name.c_str(),
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                NULL,
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS,
+                NULL);
+
+            if( handle != INVALID_HANDLE_VALUE ) {
+                FILETIME ftc, fta, ftw;
+
+                // Retrieve the file times for the file.
+                if( GetFileTime(handle, &ftc, &fta, &ftw) ) {
+                    st_atime = unpack_FILETIME(fta, st_atimensec);
+                    st_ctime = unpack_FILETIME(ftc, st_ctimensec);
+                    st_mtime = unpack_FILETIME(ftw, st_mtimensec);
+                }
+
+                CloseHandle(handle);
+            }
+        }
+
+        return err;
 #else
 		return ::stat(file_name.c_str(), this);
 #endif
 	}
+
+    uint64_t atime() const {
+        return 1000000000ull * st_atime +
+#if __USE_XOPEN2K8
+            st_atim.tv_nsec;
+#else
+            st_atimensec;
+#endif
+    }
+
+    uint64_t ctime() const {
+        return 1000000000ull * st_ctime +
+#if __USE_XOPEN2K8
+            st_ctim.tv_nsec;
+#else
+            st_ctimensec;
+#endif
+    }
+
+    uint64_t mtime() const {
+        return 1000000000ull * st_mtime +
+#if __USE_XOPEN2K8
+            st_mtim.tv_nsec;
+#else
+            st_mtimensec;
+#endif
+    }
+
+    uint64_t fsize() const {
+        return st_size;
+    }
+
+    bool is_reg() const {
+        return
+#if _WIN32
+            (st_mode & S_IFREG) == 0;
+#else
+            S_ISREG(st_mode) != 0;
+#endif
+    }
+
+    bool is_dir() const {
+        return
+#if _WIN32
+            (st_mode & S_IFDIR) == 0;
+#else
+            S_ISDIR(st_mode) != 0;
+#endif
+    }
 };
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
@@ -99,15 +197,6 @@ void directory_reader::read(const std::string & root_path)
 #endif
 
 #if _WIN32
-    auto unpack_FILETIME = [] (FILETIME & ft, uint32_t & nsec) {
-        ULARGE_INTEGER q;
-        q.LowPart = ft.dwLowDateTime;
-        q.HighPart = ft.dwHighDateTime;
-        nsec = uint32_t((q.QuadPart % 10000000) * 100); // FILETIME is in units of 100 nsec.
-        constexpr const uint64_t secs_between_epochs = 11644473600; // Seconds between 1.1.1601 and 1.1.1970 */
-        return time_t((q.QuadPart / 10000000) - secs_between_epochs);
-    };
-
     HANDLE handle = INVALID_HANDLE_VALUE;
 #else
 	DIR * handle = nullptr;
@@ -304,6 +393,11 @@ void directory_reader::read(const std::string & root_path)
                 if( list_directories_ && match && manipulator_ )
                     manipulator_();
 
+                if( skip_ ) {
+                    skip_ = false;
+                    break;
+                }
+
                 if( recursive_ && (max_level_ == 0 || stack.size() < max_level_ ) ) {
                     stack.push({ handle, path_ });
                     path_ += path_delimiter + name_;
@@ -344,18 +438,38 @@ void directory_indexer::reindex(
     db.exceptions(true);
 
     db.execute_all(R"EOS(
+        CREATE TABLE IF NOT EXISTS lfsr (
+            id              INTEGER PRIMARY KEY ON CONFLICT REPLACE,
+            lfsr    		INTEGER NOT NULL
+        ) WITHOUT ROWID;
+
         CREATE TABLE IF NOT EXISTS entries (
+            id              INTEGER PRIMARY KEY ON CONFLICT ABORT,
+            parent_id		INTEGER NOT NULL,   /* link on entries id */
             is_alive		INTEGER NOT NULL,   /* boolean */
-            /*id			BLOB PRIMARY KEY ON CONFLICT ABORT,*/
-            parent_id		INTEGER NOT NULL,   /* link on entries rowid */
-            name			TEXT NOT NULL,      /* file name*/
+            name			TEXT NOT NULL,      /* file name */
             is_dir			INTEGER,            /* boolean */
             mtime			INTEGER,            /* INTEGER as Unix Time, the number of seconds since 1970-01-01 00:00:00 UTC. and nanoseconds if supported */
             file_size		INTEGER,            /* file size in bytes */
             block_size		INTEGER,            /* file block size in bytes */
             digest			BLOB,               /* file checksum */
             UNIQUE(parent_id, name) ON CONFLICT ABORT
-        ) /*WITHOUT ROWID*/;
+        ) WITHOUT ROWID;
+
+        CREATE TRIGGER IF NOT EXISTS entries_after_insert_trigger
+            AFTER INSERT
+            ON entries
+        BEGIN
+            REPLACE INTO lfsr(id, lfsr) VALUES (1, new.id);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS entries_after_delete_trigger
+            AFTER DELETE
+            ON entries FOR EACH ROW
+        BEGIN
+            DELETE FROM blocks_digests WHERE entry_id = old.id;
+        END;
+
         CREATE UNIQUE INDEX IF NOT EXISTS i1 ON entries (parent_id, name);
         CREATE INDEX IF NOT EXISTS i2 ON entries (is_alive);
 
@@ -365,13 +479,34 @@ void directory_indexer::reindex(
             mtime			INTEGER,            /* INTEGER as Unix Time, the number of seconds since 1970-01-01 00:00:00 UTC. and nanoseconds if supported */
             digest			BLOB,               /* file block checksum */
             UNIQUE(entry_id, block_no) ON CONFLICT ABORT
-        ) /*WITHOUT ROWID*/;
+        )/*WITHOUT ROWID*/;
         CREATE UNIQUE INDEX IF NOT EXISTS i3 ON blocks_digests (entry_id, block_no);
     )EOS");
 
+    uint64_t lfsr_counter = [&] {
+        sqlite3pp::query st(db, R"EOS(
+            SELECT
+                lfsr
+            FROM
+                lfsr
+            WHERE
+                id = :id
+        )EOS");
+
+        st.bind("id", 1);
+
+        auto i = st.begin();
+
+        if( !i )
+            return uint64_t(1);
+
+        return i->get<uint64_t>(0);
+
+    }();
+
     sqlite3pp::query st_sel(db, R"EOS(
         SELECT
-            rowid,
+            id,
             mtime
         FROM
             entries
@@ -382,8 +517,8 @@ void directory_indexer::reindex(
 
 	sqlite3pp::command st_ins(db, R"EOS(
         INSERT INTO entries (
-            is_alive, parent_id, name, is_dir, mtime, file_size, block_size, digest
-        ) VALUES (0, :parent_id, :name, :is_dir, NULL, :file_size, :block_size, NULL)
+            id, is_alive, parent_id, name, is_dir, mtime, file_size, block_size, digest
+        ) VALUES (:id, 0, :parent_id, :name, :is_dir, NULL, :file_size, :block_size, NULL)
 	)EOS");
 	
 	sqlite3pp::command st_upd(db, R"EOS(
@@ -404,7 +539,7 @@ void directory_indexer::reindex(
         UPDATE entries SET
             is_alive = 0
         WHERE
-            rowid = :id
+            id = :id
     )EOS");
 
     sqlite3pp::command st_upd_after(db, R"EOS(
@@ -413,12 +548,12 @@ void directory_indexer::reindex(
             mtime = :mtime,
             digest = :digest
         WHERE
-            rowid = :id
+            id = :id
     )EOS");
 
     sqlite3pp::query st_blk_sel(db, R"EOS(
         SELECT
-            rowid, *
+            *
         FROM
             blocks_digests
         WHERE
@@ -449,7 +584,13 @@ void directory_indexer::reindex(
             AND block_no > :block_no
     )EOS");
 
-    std::unordered_map<std::string, uint64_t> parents;
+    struct parent_dir {
+        uint64_t id;
+        uint64_t mtim;
+        uint64_t mtime;
+    };
+
+    std::unordered_map<std::string, parent_dir> parents;
 
     typedef std::vector<uint8_t> blob;
 
@@ -498,21 +639,20 @@ void directory_indexer::reindex(
 
         bind(st_blk_ins);
 
-        auto exceptions_safe = db.exceptions();
-        at_scope_exit( db.exceptions(exceptions_safe) );
         db.exceptions(false);
 
         if( st_blk_ins.execute() == SQLITE_CONSTRAINT_UNIQUE ) {
-            db.exceptions(true);
             bind(st_blk_upd);
             st_blk_upd.execute();
         }
+
+        db.exceptions(true);
 
         tx_deadline();
     };
 
 	auto update_entry = [&] (
-        uint64_t parent_id,
+        const parent_dir & parent,
 		const std::string & name,
 		bool is_dir,
         uint64_t mtime,
@@ -521,7 +661,7 @@ void directory_indexer::reindex(
         uint64_t * p_mtim = nullptr)
 	{
 		auto bind = [&] (auto & st) {
-            st.bind("parent_id", parent_id);
+            st.bind("parent_id", parent.id);
             st.bind("name", name, sqlite3pp::nocopy);
 
 			if( is_dir )
@@ -540,10 +680,7 @@ void directory_indexer::reindex(
                 st.bind("block_size", block_size);
         };
 		
-        auto exceptions_safe = db.exceptions();
-        at_scope_exit( db.exceptions(exceptions_safe) );
-
-        st_sel.bind("parent_id", parent_id);
+        st_sel.bind("parent_id", parent.id);
         st_sel.bind("name", name, sqlite3pp::nocopy);
 
         uint64_t id = 0, mtim = 0;
@@ -552,25 +689,31 @@ void directory_indexer::reindex(
             auto i = st_sel.begin();
 
             if( i ) {
-                id = i->get<uint64_t>("rowid");
+                id = i->get<uint64_t>("id");
                 mtim = i->get<uint64_t>("mtime");
             }
         };
 
-        db.exceptions(true);
         get_id_mtim();
 
         // then mtime not changed, just touch entry
         if( modified_only_ && id != 0 && (mtim == mtime || mtime == 0) ) {
-            st_upd_touch.bind("id", id);
-            st_upd_touch.execute();
+            // touch only if parent dir changed and not root
+            if( parent.mtim != parent.mtime && parent.id != 0 ) {
+                st_upd_touch.bind("id", id);
+                st_upd_touch.execute();
+            }
         }
         else {
-            db.exceptions(false);
-            bind(st_ins);
-
-            if( st_ins.execute() == SQLITE_CONSTRAINT_UNIQUE ) {
-                db.exceptions(true);
+            if( id == 0 ) {
+                auto next_id = db.shift_lfsr(lfsr_counter);
+                st_ins.bind("id", next_id);
+                bind(st_ins);
+                st_ins.execute();
+                //if( st_ins.execute(SQLITE_CONSTRAINT_UNIQUE) != SQLITE_CONSTRAINT_UNIQUE )
+                lfsr_counter = id = next_id;
+            }
+            else {
                 bind(st_upd);
                 st_upd.execute();
             }
@@ -696,6 +839,8 @@ void directory_indexer::reindex(
         return true;
     };
 
+    parent_dir root = { 0, 0, 0 };
+
     dr.recursive_ = dr.list_directories_ = true;
     dr.manipulator_ = [&] {
         if( p_shutdown != nullptr && *p_shutdown ) {
@@ -704,19 +849,23 @@ void directory_indexer::reindex(
         }
 
         // skip inaccessible files or directories
-        if( access(dr.path_name_, R_OK | (dr.is_dir_ ? X_OK : 0)) != 0 )
+        if( access(dr.path_name_, R_OK | (dr.is_dir_ ? X_OK : 0)) != 0 ) {
+            dr.skip_ = dr.is_dir_;
             return;
+        }
 
-        uint64_t parent_id = [&] {
+        const auto & parent = [&] {
             auto pit = parents.find(dr.path_);
 
 			if( pit == parents.cend() ) {
                 if( dr.level_ > 1 )
 					throw std::runtime_error("Undefined behavior");
 
-                auto id = update_entry(0, dr.path_, true, 0, 0, 0, 0);
-                parents.emplace(std::make_pair(dr.path_, id));
-                return id;
+                file_stat st(dr.path_);
+                root.id = update_entry(root, dr.path_, true, root.mtime = st.mtime(), 0, 0, &root.mtim);
+                parents.emplace(std::make_pair(dr.path_, root));
+
+                return parents.find(dr.path_)->second;
             }
 
             return pit->second;
@@ -724,9 +873,9 @@ void directory_indexer::reindex(
 
         size_t block_size = 4096;
 
-        uint64_t mtim, fmtim = dr.mtime_ * 1000000000 + dr.mtime_ns_;
+        uint64_t mtim, fmtim = 1000000000ull * dr.mtime_ + dr.mtime_ns_;
         uint64_t entry_id = update_entry(
-            parent_id,
+            parent,
             dr.name_,
             dr.is_dir_,
             fmtim,
@@ -734,40 +883,58 @@ void directory_indexer::reindex(
             block_size,
             &mtim);
 
-        if( dr.is_dir_ )
-            parents.emplace(std::make_pair(dr.path_name_, entry_id));
-
-        // if file modified then calculate digests
-
-        if( dr.is_reg_ && (!modified_only_ || mtim != fmtim) ) {
-            cdc512 ctx;
-
-            if( update_blocks(ctx, dr.path_name_, entry_id, fmtim, block_size) ) {
-                blob digest;
-                ctx.finish(digest);
-
-                st_upd_after.bind("id", entry_id);
-                st_upd_after.bind("mtime", fmtim);
-                st_upd_after.bind("digest", digest, sqlite3pp::nocopy);
-                st_upd_after.execute();
-            }
+        if( dr.is_dir_ ) {
+            parent_dir entry = { entry_id, mtim, fmtim };
+            parents.emplace(std::make_pair(dr.path_name_, entry));
         }
-	};
+
+        if( !modified_only_ || mtim != fmtim ) {
+            // if file modified then calculate digests
+
+            if( dr.is_reg_ ) {
+                cdc512 ctx;
+
+                if( update_blocks(ctx, dr.path_name_, entry_id, fmtim, block_size) ) {
+                    blob digest;
+                    ctx.finish(digest);
+
+                    st_upd_after.bind("digest", digest, sqlite3pp::nocopy);
+                }
+            }
+            else {
+                st_upd_after.bind("digest", nullptr);
+            }
+
+            st_upd_after.bind("id", entry_id);
+            st_upd_after.bind("mtime", fmtim);
+            st_upd_after.execute();
+        }
+    };
 
     dr.read(dir_path_name);
-		
+
+    if( !modified_only_ || root.mtim != root.mtime ) {
+        st_upd_after.bind("id", root.id);
+        st_upd_after.bind("mtime", root.mtime);
+        st_upd_after.bind("digest", nullptr);
+        st_upd_after.execute();
+    }
+
     auto cleanup_entries = [&db] {
         db.execute_all(R"EOS(
-            DELETE FROM blocks_digests WHERE entry_id IN (
-                SELECT
-                    rowid
-                FROM
-                    entries
-                WHERE
-                    is_alive <> 0
+            DELETE FROM entries WHERE id IN (
+               SELECT
+                   e.id
+               FROM
+                   entries AS e
+                       JOIN entries AS p
+                       ON e.parent_id = p.id
+               WHERE
+                   e.is_alive <> 0
+                   AND p.is_alive == 0
             );
-            DELETE FROM entries WHERE is_alive <> 0;
-            UPDATE entries SET is_alive = 1;
+            /*DELETE FROM entries WHERE is_alive <> 0;*/
+            UPDATE entries SET is_alive = 1 WHERE is_alive = 0;
         )EOS");
     };
 

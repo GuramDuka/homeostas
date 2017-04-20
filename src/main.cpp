@@ -40,12 +40,14 @@ int main(int argc,char ** argv)
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QGuiApplication app(argc, argv);
 
-    qmlRegisterType<QDirectoryTracker>("com.homeostas.directorytracker", 1, 0, "QDirectoryTracker");
+    qmlRegisterType<DirectoryTracker>("com.homeostas.directorytracker", 1, 0, "QDirectoryTracker");
 
     QQmlApplicationEngine engine;
 
-    QHomeostas homeostas;
+    Homeostas homeostas;
     engine.rootContext()->setContextProperty("homeostas", &homeostas);
+    HomeostasConfiguration homeostasConfiguration;
+    engine.rootContext()->setContextProperty("homeostasConfiguration", &homeostasConfiguration);
 
     engine.load(QUrl(QLatin1String("qrc:/main.qml")));
 

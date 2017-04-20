@@ -158,16 +158,30 @@ std::string cdc512::to_short_string(const char * abc, char delimiter, size_t int
 
     size_t l = slen(abc), i = 0;
 
-    for( auto a : digest64 )
-        while( a ) {
-            s.push_back(abc[a % l]);
-            a /= l;
+    //for( auto a : digest64 )
+    //    while( a ) {
+    //        s.push_back(abc[a % l]);
+    //        a /= l;
+    //
+    //        if( delimiter != '\0' && interval != 0 && ++i == interval ) {
+    //            s.push_back(delimiter);
+    //            i = 0;
+    //        }
+    //    }
 
-            if( delimiter != '\0' && interval != 0 && ++i == interval ) {
-                s.push_back(delimiter);
-                i = 0;
-            }
+    integer<sizeof(digest)> a, d = l, mod;
+
+    memcpy(a.data_, digest, sizeof(digest));
+
+    while( a ) {
+        a = a.div(l, &mod);
+        s.push_back(abc[size_t(mod)]);
+
+        if( delimiter != '\0' && interval != 0 && ++i == interval ) {
+            s.push_back(delimiter);
+            i = 0;
         }
+    }
 
     if( delimiter != '\0' && interval != 0 && s.back() == delimiter )
         s.pop_back();

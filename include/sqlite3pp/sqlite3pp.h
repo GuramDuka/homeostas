@@ -315,6 +315,41 @@ namespace sqlite3pp {
             return db_ != nullptr;
         }
 
+        static uint64_t shift_lfsr(uint64_t v) {
+            /*
+                    config          : galois
+                    length          : 63
+                    taps            : (63, 23, 17, 13)
+                    shift-amount    : 8
+                    shift-direction : right
+            */
+            enum {
+                    length = 63,
+                    tap_0  = 63,
+                    tap_1  = 23,
+                    tap_2  = 17,
+                    tap_3  = 13
+            };
+            typedef uint64_t T;
+            constexpr T zero = (T)(0);
+            constexpr T lsb = zero + (T)(1);
+            constexpr T feedback = (
+                    (lsb << (tap_0 - 1)) ^
+                    (lsb << (tap_1 - 1)) ^
+                    (lsb << (tap_2 - 1)) ^
+                    (lsb << (tap_3 - 1))
+            );
+            v = (v >> 1) ^ ((zero - (v & lsb)) & feedback);
+            v = (v >> 1) ^ ((zero - (v & lsb)) & feedback);
+            v = (v >> 1) ^ ((zero - (v & lsb)) & feedback);
+            v = (v >> 1) ^ ((zero - (v & lsb)) & feedback);
+            v = (v >> 1) ^ ((zero - (v & lsb)) & feedback);
+            v = (v >> 1) ^ ((zero - (v & lsb)) & feedback);
+            v = (v >> 1) ^ ((zero - (v & lsb)) & feedback);
+            v = (v >> 1) ^ ((zero - (v & lsb)) & feedback);
+            return v;
+        }
+
     private:
         sqlite3* db_;
 
@@ -589,11 +624,6 @@ namespace sqlite3pp {
         }
         
         template <typename T>
-        int bind(const std::string & name, const T & value) {
-            return bind(name.c_str(), value);
-        }
-
-        template <typename T>
         int bind(const std::string & name, const T & value, copy_semantic fcopy) {
             return bind(name.c_str(), value, fcopy);
         }
@@ -641,6 +671,10 @@ namespace sqlite3pp {
             rc_ = sqlite3_finalize(stmt);
             if (rc_ != SQLITE_OK)
                 db_.throw_database_error();
+            return rc_;
+        }
+
+        const auto & rc() const {
             return rc_;
         }
 
@@ -694,17 +728,17 @@ namespace sqlite3pp {
         explicit command(database& db, char const* stmt = nullptr) : statement(db, stmt) {}
         explicit command(database& db, const std::string & stmt) : command(db, stmt.c_str()) {}
 
-        int execute() {
+        int execute(int ignore_rc = -1) {
             rc_ = reset();
             if (rc_ == SQLITE_OK)
                 rc_ = step();
-            if (rc_ != SQLITE_ROW && rc_ != SQLITE_DONE)
+            if (rc_ != SQLITE_ROW && rc_ != SQLITE_DONE && rc_ != ignore_rc)
                 db_.throw_database_error();
             return rc_;
         }
 
-        int execute_all() {
-            execute();
+        int execute_all(int ignore_rc = -1) {
+            execute(ignore_rc);
 
             char const * sql = tail_;
 
@@ -730,9 +764,9 @@ namespace sqlite3pp {
                 }
 
                 finish_impl(old_stmt);
-                execute();
+                execute(ignore_rc);
 
-                if (rc_ != SQLITE_ROW && rc_ != SQLITE_DONE)
+                if (rc_ != SQLITE_ROW && rc_ != SQLITE_DONE && rc_ != ignore_rc)
                     db_.throw_database_error();
 
                 sql = tail_;

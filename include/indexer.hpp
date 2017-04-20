@@ -71,6 +71,7 @@ struct directory_reader {
     bool is_lnk_ = false;
 
     bool abort_ = false;
+    bool skip_ = false;
 
     template <typename Manipul>
     void read(const std::string & root_path, const Manipul & ml) {

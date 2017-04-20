@@ -34,16 +34,141 @@
 #include <QDateTime>
 #include <QVariant>
 #include <QNetworkInterface>
+#include <QSharedPointer>
+#include <QAbstractListModel>
 //------------------------------------------------------------------------------
 #include "tracker.hpp"
+#include "server.hpp"
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-class QHomeostas : public QObject {
+class HomeostasConfiguration : public QObject {
+        Q_OBJECT
+    public:
+        explicit HomeostasConfiguration(QObject *parent = nullptr) : QObject(parent) {
+            Q_ASSERT( singleton_ == nullptr );
+            singleton_ = this;
+        }
+
+        static HomeostasConfiguration & singleton() {
+            return *singleton_;
+        }
+
+        void setVar(const char * varName, const QVariant & val);
+
+        template <typename T>
+        void setVar(const std::string & varName, const T & val) {
+            setVar(varName.c_str(), QVariant::fromValue(val));
+        }
+
+        template <typename T>
+        void setVar(const QString & varName, const T & val) {
+            setVar(varName.toStdString().c_str(), QVariant::fromValue(val));
+        }
+
+        QVariant getVar(const char * varName, const QVariant * p_defVal = nullptr);
+
+        QVariant getVar(const std::string & varName, const QVariant * p_defVal = nullptr) {
+            return getVar(varName.c_str(), p_defVal);
+        }
+
+        QVariant getVar(const QString & varName, const QVariant * p_defVal = nullptr) {
+            return getVar(varName.toStdString().c_str(), p_defVal);
+        }
+
+        QVariant getVar(const char * varName, const QVariant & defVal) {
+            return getVar(varName, &defVal);
+        }
+
+        QVariant getVar(const std::string & varName, const QVariant & defVal) {
+            return getVar(varName.c_str(), &defVal);
+        }
+
+        struct VarNode {
+            QString name;
+            QVariant value;
+            std::vector<VarNode> vars;
+
+            VarNode() {}
+
+            VarNode(QString && v_name, QVariant && v_value) :
+                name(std::move(v_name)),
+                value(std::move(v_value)) {}
+
+            VarNode(const QString & v_name, const QVariant & v_value) :
+                name(v_name),
+                value(v_value) {}
+
+            VarNode(VarNode && v) :
+                name(std::move(v.name)),
+                value(std::move(v.value)),
+                vars(std::move(v.vars)) {}
+
+            VarNode & operator = (VarNode && v) {
+                name = std::move(v.name);
+                value = std::move(v.value);
+                vars = std::move(v.vars);
+                return *this;
+            }
+
+            VarNode & operator = (const VarNode & v) {
+                name = v.name;
+                value = v.value;
+                std::copy(std::begin(v.vars), std::end(v.vars), std::begin(vars));
+                return *this;
+            }
+        };
+
+        VarNode getVarTree(const char * varName);
+
+        VarNode getVarTree(const std::string & varName) {
+            return getVarTree(varName.c_str());
+        }
+
+        VarNode getVarTree(const QString & varName) {
+            return getVarTree(varName.toStdString().c_str());
+        }
+
+    signals:
+    public slots:
+        QVariant getVar(const QString & varName, const QVariant & defVal) {
+            return getVar(varName.toStdString().c_str(), &defVal);
+        }
+
+        void setVar(const QString & varName, const QVariant & val) {
+            setVar(varName.toStdString().c_str(), val);
+        }
+    private:
+        static HomeostasConfiguration * singleton_;
+
+        uint64_t lfsr_counter_;
+        std::unique_ptr<sqlite3pp::database> db_;
+        std::unique_ptr<sqlite3pp::query> st_sel_;
+        std::unique_ptr<sqlite3pp::query> st_sel_by_pid_;
+        std::unique_ptr<sqlite3pp::command> st_ins_;
+        std::unique_ptr<sqlite3pp::command> st_upd_;
+
+        sqlite3pp::database & db();
+        QVariant getVar(sqlite3pp::query::iterator & i, const QVariant * p_defVal = nullptr, uint64_t * p_id = nullptr);
+        QVariant getVar(uint64_t pid, const char * varName, const QVariant * p_defVal = nullptr, uint64_t * p_id = nullptr);
+        uint64_t getVarParentId(const char * varName, const char ** p_name = nullptr, bool * p_pid_valid = nullptr);
+        void setVar(uint64_t pid, const char * varName, const QVariant & val);
+};
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+class Homeostas : public QObject {
         Q_OBJECT
         Q_PROPERTY(QString uniqueId READ uniqueId WRITE setUniqueId)
     public:
-        explicit QHomeostas(QObject *parent = 0) : QObject(parent) {}
+        explicit Homeostas(QObject *parent = nullptr) : QObject(parent) {
+            Q_ASSERT( singleton_ == nullptr );
+            singleton_ = this;
+        }
+
+        static Homeostas & singleton() {
+            return *singleton_;
+        }
 
         QString uniqueId() const {
             return uniqueId_;
@@ -54,17 +179,23 @@ class QHomeostas : public QObject {
         }
     signals:
     public slots:
-        QVariant getVar(const QString & varName);
-        void setVar(const QString & varName, const QVariant & val);
         QString newUniqueId();
+
+        void startServer();
+        void stopServer();
+
+        void startTrackers();
+        void stopTrackers();
     private:
-        std::unique_ptr<sqlite3pp::database> db_;
+        static Homeostas * singleton_;
+
         QString uniqueId_;
+        std::unique_ptr<homeostas::server> server_;
 };
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-class QDirectoryTracker : public QObject {
+class DirectoryTracker : public QObject {
 		Q_OBJECT
         //Q_PROPERTY(QString author READ author WRITE setAuthor NOTIFY authorChanged)
         //Q_PROPERTY(QDateTime creationDate READ creationDate WRITE setCreationDate NOTIFY creationDateChanged)
@@ -77,7 +208,7 @@ class QDirectoryTracker : public QObject {
             READ directoryPathName
             WRITE setDirectoryPathName)
     public:
-        explicit QDirectoryTracker(QObject *parent = 0) : QObject(parent) {}
+        explicit DirectoryTracker(QObject *parent = nullptr) : QObject(parent) {}
 
         //QString author() const {
         //    return author_;
@@ -98,31 +229,43 @@ class QDirectoryTracker : public QObject {
         //}
 
         QString directoryUserDefinedName() const {
-            return QString::fromStdString(dt_.dir_user_defined_name());
+            if( dt_ == nullptr )
+                dt_.reset(new homeostas::directory_tracker);
+
+            return QString::fromStdString(dt_->dir_user_defined_name());
         }
 
         void setDirectoryUserDefinedName(const QString & directoryUserDefinedName) {
-            auto started = dt_.started();
+            if( dt_ == nullptr )
+                dt_.reset(new homeostas::directory_tracker);
 
-            dt_.shutdown();
-            dt_.dir_user_defined_name(directoryUserDefinedName.toStdString());
+            auto started = dt_->started();
+
+            dt_->shutdown();
+            dt_->dir_user_defined_name(directoryUserDefinedName.toStdString());
 
             if( started )
-                dt_.startup();
+                dt_->startup();
         }
 
         QString directoryPathName() const {
-            return QString::fromStdString(dt_.dir_path_name());
+            if( dt_ == nullptr )
+                dt_.reset(new homeostas::directory_tracker);
+
+            return QString::fromStdString(dt_->dir_path_name());
         }
 
         void setDirectoryPathName(const QString & directoryPathName) {
-            auto started = dt_.started();
+            if( dt_ == nullptr )
+                dt_.reset(new homeostas::directory_tracker);
 
-            dt_.shutdown();
-            dt_.dir_path_name(directoryPathName.toStdString());
+            auto started = dt_->started();
+
+            dt_->shutdown();
+            dt_->dir_path_name(directoryPathName.toStdString());
 
             if( started )
-                dt_.startup();
+                dt_->startup();
         }
 
     signals:
@@ -134,10 +277,36 @@ class QDirectoryTracker : public QObject {
         void startTracker();
         void stopTracker();
     private:
-        homeostas::directory_tracker dt_;
+        mutable std::unique_ptr<homeostas::directory_tracker> dt_;
 
-        QString author_;
-        QDateTime creationDate_;
+        //QString author_;
+        //QDateTime creationDate_;
+};
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+class DirectoriesTrackersModel : public QAbstractListModel {
+        Q_OBJECT
+    public:
+        enum DirectoryTrackerRole {
+            DirectoryUserDefinedNameRole = Qt::DisplayRole,
+            DirectoryPathNameRole = Qt::UserRole
+        };
+        Q_ENUM(DirectoryTrackerRole)
+
+        DirectoriesTrackersModel(QObject *parent = nullptr);
+
+        int rowCount(const QModelIndex & = QModelIndex()) const;
+        QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const;
+        QHash<int, QByteArray> roleNames() const;
+
+        Q_INVOKABLE QVariantMap get(int row) const;
+        Q_INVOKABLE void append(const QString &directoryUserDefinedName, const QString &directoryPathName);
+        Q_INVOKABLE void set(int row, const QString &directoryUserDefinedName, const QString &directoryPathName);
+        Q_INVOKABLE void remove(int row);
+
+    private:
+        QList<QSharedPointer<DirectoryTracker>> trackers_;
 };
 //------------------------------------------------------------------------------
 #endif // QOBJECTS_HPP_INCLUDED

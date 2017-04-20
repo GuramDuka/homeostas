@@ -32,35 +32,379 @@
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-QVariant QHomeostas::getVar(const QString & varName)
+HomeostasConfiguration * HomeostasConfiguration::singleton_ = nullptr;
+//------------------------------------------------------------------------------
+sqlite3pp::database & HomeostasConfiguration::db()
 {
+    if( db_ == nullptr ) {
+        db_.reset(new sqlite3pp::database);
+        sqlite3_enable_shared_cache(1);
+
+        db_->connect(
+            homeostas::home_path(false)
+                + ".homeostas" + homeostas::path_delimiter + "homeostas.sqlite",
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_SHAREDCACHE
+        );
+
+        sqlite3pp::command(*db_, R"EOS(
+            PRAGMA page_size = 4096;
+            PRAGMA journal_mode = WAL;
+            PRAGMA count_changes = OFF;
+            PRAGMA auto_vacuum = NONE;
+            PRAGMA cache_size = -2048;
+            PRAGMA synchronous = NORMAL;
+            /*PRAGMA temp_store = MEMORY;*/
+        )EOS").execute_all();
+
+        sqlite3pp::command(*db_, R"EOS(
+            CREATE TABLE IF NOT EXISTS lfsr (
+                id              INTEGER PRIMARY KEY ON CONFLICT REPLACE,
+                lfsr    		INTEGER NOT NULL
+            ) WITHOUT ROWID;
+
+            CREATE TABLE IF NOT EXISTS config (
+                id              INTEGER PRIMARY KEY ON CONFLICT ABORT,
+                parent_id		INTEGER NOT NULL,   /* link on entries id */
+                name            TEXT PRIMARY KEY ON CONFLICT REPLACE,
+                value_type		INTEGER,	/* 1 - boolean, 2 - integer, 3 - double, 4 - string */
+                value_b			INTEGER,	/* boolean */
+                value_i			INTEGER,	/* integer */
+                value_n			REAL,       /* double */
+                value_s			TEXT		/* string */
+                UNIQUE(parent_id, name) ON CONFLICT ABORT
+            ) WITHOUT ROWID;
+
+            CREATE TRIGGER IF NOT EXISTS config_after_insert_trigger
+                AFTER INSERT
+                ON config
+            BEGIN
+                REPLACE INTO lfsr(id, lfsr) VALUES (1, new.id);
+            END;
+
+            CREATE UNIQUE INDEX IF NOT EXISTS i1 ON config (parent_id, name);
+        )EOS").execute_all();
+
+        st_sel_.reset(new sqlite3pp::query(*db_, R"EOS(
+            SELECT
+                id                                              AS id,
+                name                                            AS name,
+                value_type                                      AS value_type,
+                COALESCE(value_b, value_i, value_n, value_s)    AS value
+            FROM
+                config
+            WHERE
+                parent_id = :parent_id
+                AND name = :name
+        )EOS"));
+
+        st_sel_by_pid_.reset(new sqlite3pp::query(*db_, R"EOS(
+            SELECT
+                id                                              AS id,
+                name                                            AS name,
+                value_type                                      AS value_type,
+                COALESCE(value_b, value_i, value_n, value_s)    AS value
+            FROM
+                config
+            WHERE
+                parent_id = :parent_id
+        )EOS"));
+
+        st_ins_.reset(new sqlite3pp::command(*db_, R"EOS(
+            INSERT INTO config
+                (id, parent_id, name, value_type, value_b, value_i, value_n, value_s)
+                VALUES
+                (:id, :parent_id, :name, :value_type, :value_b, :value_i, :value_n, :value_s);
+        )EOS"));
+
+        st_upd_.reset(new sqlite3pp::command(*db_, R"EOS(
+            UPDATE config SET
+                name        = :name,
+                value_type  = :value_type,
+                value_b     = :value_b,
+                value_i     = :value_i,
+                value_n     = :value_n,
+                value_s     = :value_s
+        )EOS"));
+
+        lfsr_counter_ = [&] {
+            sqlite3pp::query st(*db_, R"EOS(
+                SELECT
+                    lfsr
+                FROM
+                    lfsr
+                WHERE
+                    id = :id
+            )EOS");
+
+            st.bind("id", 1);
+
+            auto i = st.begin();
+
+            if( !i )
+                return uint64_t(1);
+
+            return i->get<uint64_t>(0);
+        }();
+    }
+
+    return *db_;
+}
+//------------------------------------------------------------------------------
+QVariant HomeostasConfiguration::getVar(sqlite3pp::query::iterator & i, const QVariant * p_defVal, uint64_t * p_id)
+{
+    if( i ) {
+        int vt = i->column_isnull("value_type") ? 0 : i->get<int>("value_type");
+
+        switch( vt ) {
+            default:
+            case 0 :
+                break;
+            case 1 :
+                return i->get<int>("value") ? true : false;
+            case 2 :
+                return i->get<int64_t>("value");
+            case 3 :
+                return i->get<double>("value");
+            case 4 :
+                return QString::fromUtf8(i->get<const char *>("value"));
+        }
+
+        if( p_id != nullptr )
+            *p_id = i->get<uint64_t>("id");
+    }
+    else if( p_id != nullptr )
+        *p_id = 0;
+
+    if( p_defVal != nullptr )
+        return *p_defVal;
+
     return QVariant();
 }
 //------------------------------------------------------------------------------
-void QHomeostas::setVar(const QString & varName, const QVariant & val)
+QVariant HomeostasConfiguration::getVar(uint64_t pid, const char * varName, const QVariant * p_defVal, uint64_t * p_id)
 {
-    sqlite3pp::database db;
-
-    sqlite3_enable_shared_cache(1);
-
-    db.connect(
-        homeostas::home_path(false)
-            + ".homeostas" + homeostas::path_delimiter + "homeostas.sqlite",
-        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_SHAREDCACHE
-    );
-
-    auto rc = sqlite3pp::command(db, R"EOS(
-        PRAGMA page_size = 4096;
-        PRAGMA journal_mode = WAL;
-        PRAGMA count_changes = OFF;
-        PRAGMA auto_vacuum = NONE;
-        PRAGMA cache_size = -2048;
-        PRAGMA synchronous = NORMAL;
-        /*PRAGMA temp_store = MEMORY;*/
-    )EOS").execute_all();
-};
+    st_sel_->bind("parent_id", pid);
+    st_sel_->bind("name", varName, sqlite3pp::nocopy);
+    return getVar(st_sel_->begin(), p_defVal, p_id);
+}
 //------------------------------------------------------------------------------
-QString QHomeostas::newUniqueId()
+uint64_t HomeostasConfiguration::getVarParentId(const char * varName, const char ** p_name, bool * p_pid_valid)
+{
+    uint64_t pid = 0;
+    bool pid_valid = true;
+    const char * p = varName;
+    char * n = (char *) alloca((strlen(varName) + 1) * sizeof(char));
+
+    while( *p != '\0' && pid_valid ) {
+        const char * a = p;
+
+        while( *a != '\0' ) {
+            if( *a == '.' ) {
+                size_t l = (a - p) * sizeof(char);
+                memcpy(n, p, l);
+                n[l] = '\0';
+
+                st_sel_->bind("parent_id", pid);
+                st_sel_->bind("name", (const char *) n, sqlite3pp::nocopy);
+
+                auto i = st_sel_->begin();
+
+                if( i )
+                    pid = i->get<uint64_t>("id");
+                else
+                    pid_valid = false;
+
+                p = a + 1;
+                break;
+            }
+
+            a++;
+        }
+
+        if( *a == '\0' )
+            break;
+    }
+
+    if( p_name != nullptr )
+        *p_name = p;
+
+    if( p_pid_valid != nullptr )
+        *p_pid_valid = pid_valid;
+
+    return pid;
+}
+//------------------------------------------------------------------------------
+QVariant HomeostasConfiguration::getVar(const char * varName, const QVariant * p_defVal)
+{
+    bool pid_valid = true;
+    const char * p = nullptr;
+    uint64_t pid = getVarParentId(varName, &p, &pid_valid);
+
+    if( pid_valid )
+        return getVar(pid, p, p_defVal);
+
+    if( p_defVal != nullptr )
+        return *p_defVal;
+
+    return QVariant();
+}
+//------------------------------------------------------------------------------
+void HomeostasConfiguration::setVar(uint64_t pid, const char * varName, const QVariant & val)
+{
+    st_sel_->bind("parent_id", pid);
+    st_sel_->bind("name", varName, sqlite3pp::nocopy);
+
+    auto bindex = [&] (auto & st) {
+        st.bind("parent_id", pid);
+        st.bind("name", varName, sqlite3pp::nocopy);
+        st.bind("value_b", nullptr);
+        st.bind("value_i", nullptr);
+        st.bind("value_n", nullptr);
+        st.bind("value_s", nullptr);
+
+        switch( val.type() ) {
+            case QVariant::Type::Bool       :
+                st.bind("value_type", 1);
+                st.bind("value_b", val.toBool());
+                st.execute_all();
+                break;
+            case QVariant::Type::Double     :
+                st.bind("value_type", 3);
+                st.bind("value_n", val.toDouble());
+                st.execute_all();
+                break;
+            case QVariant::Type::Int        :
+                st.bind("value_type", 2);
+                st.bind("value_i", val.toInt());
+                st.execute_all();
+                break;
+            case QVariant::Type::UInt       :
+                st.bind("value_type", 2);
+                st.bind("value_i", val.toUInt());
+                st.execute_all();
+                break;
+            case QVariant::Type::LongLong   :
+                st.bind("value_type", 2);
+                st.bind("value_i", val.toLongLong());
+                st.execute_all();
+                break;
+            case QVariant::Type::ULongLong  :
+                st.bind("value_type", 2);
+                st.bind("value_i", val.toULongLong());
+                st.execute_all();
+                break;
+            case QVariant::Type::String     :
+            default                         :
+                st.bind("value_type", 2);
+                st.bind("value_s", val.toString().toStdString().c_str(), sqlite3pp::nocopy);
+                st.execute_all();
+                break;
+        }
+    };
+
+    auto i = st_sel_->begin();
+
+    if( i ) {
+        bindex(*st_upd_);
+    }
+    else {
+        uint64_t id = db_->shift_lfsr(lfsr_counter_);
+        st_ins_->bind("id", id);
+        bindex(*st_ins_);
+        lfsr_counter_ = id;
+    }
+}
+//------------------------------------------------------------------------------
+void HomeostasConfiguration::setVar(const char * varName, const QVariant & val)
+{
+    uint64_t pid = 0;
+    const char * p = varName;
+    char * n = (char *) alloca((strlen(varName) + 1) * sizeof(char));
+
+    while( *p != '\0' ) {
+        const char * a = p;
+
+        while( *a != '\0' ) {
+            if( *a == '.' ) {
+                size_t l = (a - p) * sizeof(char);
+                memcpy(n, p, l);
+                n[l] = '\0';
+
+                st_sel_->bind("parent_id", pid);
+                st_sel_->bind("name", (const char *) n, sqlite3pp::nocopy);
+
+                auto i = st_sel_->begin();
+
+                if( i ) {
+                    pid = i->get<uint64_t>("id");
+                }
+                else {
+                    uint64_t id = db_->shift_lfsr(lfsr_counter_);
+
+                    st_ins_->bind("id", id);
+                    st_ins_->bind("parent_id", pid);
+                    st_ins_->bind("name", (const char *) n, sqlite3pp::nocopy);
+                    st_ins_->bind("value_type", nullptr);
+                    st_ins_->bind("value_b", nullptr);
+                    st_ins_->bind("value_i", nullptr);
+                    st_ins_->bind("value_n", nullptr);
+                    st_ins_->bind("value_s", nullptr);
+                    st_ins_->execute_all();
+
+                    lfsr_counter_ = id;
+                }
+
+                p = a + 1;
+                break;
+            }
+
+            a++;
+        }
+
+        if( *a == '\0' )
+            break;
+    }
+
+    setVar(pid, p, val);
+}
+//------------------------------------------------------------------------------
+HomeostasConfiguration::VarNode HomeostasConfiguration::getVarTree(const char * varName)
+{
+    VarNode var;
+
+    bool pid_valid = true;
+    const char * p = nullptr;
+    uint64_t id, pid = getVarParentId(varName, &p, &pid_valid);
+
+    if( pid_valid ) {
+        var.name = QString::fromUtf8(p);
+        var.value = getVar(pid, p, nullptr, &id);
+
+        std::function<void (uint64_t, VarNode &)> g = [&] (uint64_t pid, VarNode & var) {
+            st_sel_by_pid_->bind("parent_id", pid);
+            std::vector<uint64_t> ids;
+
+            for( auto i = st_sel_by_pid_->begin(); i; ++i ) {
+                var.vars.emplace_back(VarNode(
+                    QString::fromUtf8(i->get<const char *>("name")), getVar(i)));
+                ids.emplace_back(i->get<uint64_t>("id"));
+            }
+
+            for( size_t i = 0; var.vars.size(); i++ )
+                g(ids[i], var.vars[i]);
+        };
+
+        g(id, var);
+    }
+
+    return var;
+}
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+Homeostas * Homeostas::singleton_ = nullptr;
+//------------------------------------------------------------------------------
+QString Homeostas::newUniqueId()
 {
     std::vector<uint8_t> entropy;
 
@@ -116,7 +460,6 @@ QString QHomeostas::newUniqueId()
     r.srand(&entropy[0], entropy.size());
     r.warming();
 
-    QString id;
     homeostas::cdc512 ctx;
 
     for( auto & q : ctx.digest )
@@ -134,23 +477,154 @@ QString QHomeostas::newUniqueId()
         }
 
     return QString::fromStdString(
-        ctx.to_short_string("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", '-', 6));
+        ctx.to_short_string("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", '-', 9));
+}
+//------------------------------------------------------------------------------
+void Homeostas::startServer()
+{
+    if( server_ != nullptr )
+        return;
+
+    server_->startup();
+}
+//------------------------------------------------------------------------------
+void Homeostas::stopServer()
+{
+    if( server_ == nullptr )
+        return;
+
+    server_->shutdown();
+    server_ = nullptr;
+}
+//------------------------------------------------------------------------------
+void Homeostas::startTrackers()
+{
+    auto & config = HomeostasConfiguration::singleton();
+
+    for( const auto & tracker : config.getVarTree("tracker").vars ) {
+        DirectoryTracker dt;
+        dt.setDirectoryUserDefinedName(tracker.name);
+
+        for( const auto & var : tracker.vars ) {
+            if( var.name == "path" ) {
+                dt.setDirectoryPathName(var.value.toString());
+            }
+        );
+    }
+}
+//------------------------------------------------------------------------------
+void Homeostas::stopTrackers()
+{
 }
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-//void QDirectoryTracker::doSend(int count)
+//void DirectoryTracker::doSend(int count)
 //{
 //    qDebug() << "Received in C++ from QML:" << count;
 //}
 //------------------------------------------------------------------------------
-void QDirectoryTracker::startTracker()
+void DirectoryTracker::startTracker()
 {
-    dt_.startup();
+    if( dt_ == nullptr )
+        return;
+
+    dt_->startup();
 }
 //------------------------------------------------------------------------------
-void QDirectoryTracker::stopTracker()
+void DirectoryTracker::stopTracker()
 {
-    dt_.shutdown();
+    if( dt_ == nullptr )
+        return;
+
+    dt_->shutdown();
+    dt_ = nullptr;
+}
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+DirectoriesTrackersModel::DirectoriesTrackersModel(QObject *parent) :
+    QAbstractListModel(parent)
+{
+    QSharedPointer<DirectoryTracker> dt(new DirectoryTracker);
+    dt->setDirectoryUserDefinedName(QString::fromUtf8("hiew"));
+    dt->setDirectoryPathName(QString::fromUtf8("c:\\hiew"));
+    trackers_.append(dt);
+}
+//------------------------------------------------------------------------------
+int DirectoriesTrackersModel::rowCount(const QModelIndex &) const
+{
+    return trackers_.count();
+}
+//------------------------------------------------------------------------------
+QVariant DirectoriesTrackersModel::data(const QModelIndex &index, int role) const
+{
+    auto row = index.row();
+
+    if( row < rowCount() ) {
+        auto data = trackers_.at(row);
+
+        switch( role ) {
+            case DirectoryUserDefinedNameRole :
+                return data->directoryUserDefinedName();
+            case DirectoryPathNameRole :
+                return data->directoryPathName();
+        }
+    }
+
+    return QVariant();
+}
+//------------------------------------------------------------------------------
+QHash<int, QByteArray> DirectoriesTrackersModel::roleNames() const
+{
+    return {
+        { DirectoryUserDefinedNameRole, "name" },
+        { DirectoryPathNameRole, "path" }
+    };
+}
+//------------------------------------------------------------------------------
+QVariantMap DirectoriesTrackersModel::get(int row) const
+{
+    const auto tracker = trackers_.at(row);
+    return {
+        { "name", tracker->directoryUserDefinedName() },
+        { "path", tracker->directoryPathName() }
+    };
+}
+//------------------------------------------------------------------------------
+void DirectoriesTrackersModel::append(const QString &directoryUserDefinedName, const QString &directoryPathName)
+{
+    int row = 0;
+
+    while( row < trackers_.count() && directoryUserDefinedName > trackers_.at(row)->directoryUserDefinedName() )
+        ++row;
+    beginInsertRows(QModelIndex(), row, row);
+    QSharedPointer<DirectoryTracker> dt(new DirectoryTracker);
+    dt->setDirectoryUserDefinedName(directoryUserDefinedName);
+    dt->setDirectoryPathName(directoryPathName);
+    trackers_.insert(row, dt);
+    endInsertRows();
+}
+//------------------------------------------------------------------------------
+void DirectoriesTrackersModel::set(int row, const QString &directoryUserDefinedName, const QString &directoryPathName)
+{
+    if( row < 0 || row >= trackers_.count() )
+        return;
+
+    QSharedPointer<DirectoryTracker> dt(new DirectoryTracker);
+    dt->setDirectoryUserDefinedName(directoryUserDefinedName);
+    dt->setDirectoryPathName(directoryPathName);
+    trackers_.replace(row, dt);
+    dataChanged(index(row, 0), index(row, 0), { DirectoryUserDefinedNameRole, DirectoryPathNameRole });
+}
+//------------------------------------------------------------------------------
+void DirectoriesTrackersModel::remove(int row)
+{
+    if( row < 0 || row >= trackers_.count() )
+        return;
+
+    beginRemoveRows(QModelIndex(), row, row);
+    trackers_.removeAt(row);
+    endRemoveRows();
 }
 //------------------------------------------------------------------------------

@@ -37,6 +37,7 @@ void tracker_test()
 	try {
         directory_tracker dt;
 
+        dt.oneshot(true);
         dt.dir_user_defined_name("hiew");
         dt.dir_path_name("c:\\hiew");
         dt.startup();

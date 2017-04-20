@@ -43,7 +43,7 @@ void run_tests()
     cdc512_test();
     rand_test();
     thread_pool_test();
-    indexer_test();
+    //indexer_test();
     tracker_test();
 	client_test();
 	server_test();

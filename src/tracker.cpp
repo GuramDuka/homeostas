@@ -33,15 +33,14 @@ namespace homeostas {
 void directory_tracker::worker()
 {
     sqlite3pp::database db;
-    directory_indexer di;
+    sqlite3_enable_shared_cache(1);
 
+    directory_indexer di;
     di.modified_only(true);
 
     auto connect_db = [&] {
         if( db.connected() )
             return;
-
-        sqlite3_enable_shared_cache(1);
 
         db.exceptions(false).connect(
             db_path_name_,
@@ -80,7 +79,7 @@ void directory_tracker::worker()
         using namespace std::chrono_literals;
         auto deadline = now + 10s + 10ms;
 
-        if( cv_.wait_until(lk, deadline, [&] { return shutdown_; }) )
+        if( cv_.wait_until(lk, deadline, [&] { return shutdown_ || oneshot_; }) )
             break;
     }
 
@@ -89,6 +88,9 @@ void directory_tracker::worker()
 //------------------------------------------------------------------------------
 void directory_tracker::startup()
 {
+    if( thread_ != nullptr )
+        return;
+
     auto remove_forbidden_characters = [] (const auto & s) {
         std::string t;
 
@@ -145,7 +147,10 @@ void directory_tracker::shutdown()
         return;
 
     std::unique_lock<std::mutex> lk(mtx_);
-    shutdown_ = true;
+
+    if( !oneshot_ )
+        shutdown_ = true;
+
     lk.unlock();
     cv_.notify_one();
 
