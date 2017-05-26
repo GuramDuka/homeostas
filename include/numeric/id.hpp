@@ -29,19 +29,23 @@
 //------------------------------------------------------------------------------
 namespace nn {  // namespace NaturalNumbers
 //------------------------------------------------------------------------------
-template <typename A,typename B>
-static inline const A & imax(const A & a,const B & b)
+template <typename A, typename B>
+static inline const A & imax(const A & a, const B & b)
 {
 	return a > b ? a : b;
 }
 //------------------------------------------------------------------------------
-template <typename A,typename B>
-static inline const A & imin(const A & a,const B & b)
+template <typename A, typename B>
+static inline const A & imin(const A & a, const B & b)
 {
 	return a < b ? a : b;
 }
 //------------------------------------------------------------------------------
+// autodetect maximum word size
 #ifndef SIZEOF_WORD
+#   if __GNUC__ && __x86_64__
+#      define SIZEOF_WORD 8
+#   endif
 #endif
 //------------------------------------------------------------------------------
 #if SIZEOF_WORD == 1
@@ -54,52 +58,20 @@ typedef uint16_t word;
 typedef int16_t sword;
 typedef uint32_t dword;
 typedef int32_t sdword;
-#elif SIZEOF_WORD == 4
-typedef uint32_t word;
-typedef int32_t sword;
-typedef uint64_t dword;
-typedef int64_t sdword;
-#elif SIZEOF_WORD == 8 && __GNUC__ && __x86_64__
+#elif SIZEOF_WORD == 8 && __GNUC__
 typedef uint64_t word;
 typedef int64_t sword;
 typedef __uint128_t dword;
 typedef __int128_t sdword;
-#elif __GNUC__ && __x86_64__
-typedef uint64_t word;
-typedef int64_t sword;
-typedef __uint128_t dword;
-typedef __int128_t sdword;
-#ifdef SIZEOF_WORD
-#undef SIZEOF_WORD
-#endif
-#define SIZEOF_WORD 8
-#elif _MSC_VER && _M_IX86
-typedef uint32_t word;
-typedef int32_t sword;
-typedef uint64_t dword;
-typedef int64_t sdword;
-#ifdef SIZEOF_WORD
-#undef SIZEOF_WORD
-#endif
-#define SIZEOF_WORD 4
-#elif _MSC_VER && _M_X64
-typedef uint32_t word;
-typedef int32_t sword;
-typedef uint64_t dword;
-typedef int64_t sdword;
-#ifdef SIZEOF_WORD
-#undef SIZEOF_WORD
-#endif
-#define SIZEOF_WORD 4
 #else
 typedef uint32_t word;
 typedef int32_t sword;
 typedef uint64_t dword;
 typedef int64_t sdword;
-#ifdef SIZEOF_WORD
+#if SIZEOF_WORD != 4
 #undef SIZEOF_WORD
-#endif
 #define SIZEOF_WORD 4
+#endif
 #endif
 //------------------------------------------------------------------------------
 #if SIZEOF_WORD < 8
@@ -128,7 +100,11 @@ typedef class nn_integer_data {
             }
         }
 
+#if ENABLE_ATOMIC_COUNTER
+        mutable std::atomic_uintptr_t ref_count_;
+#else
         mutable uintptr_t ref_count_;
+#endif
         mutable uintptr_t length_;
 #if SIZEOF_WORD == 1
         mutable uintptr_t dummy_;		// for shift down overflow bits
@@ -140,7 +116,7 @@ typedef class nn_integer_data {
         mutable uintptr_t dummy_;
         mutable word data_[4];
 #elif SIZEOF_WORD == 8
-        mutable word dummy_;
+        mutable uintptr_t dummy_;
         mutable word data_[4];
 #else
 #error Invalid macro SIZEOF_WORD
@@ -163,7 +139,11 @@ typedef class nn_integer_data {
 	}
 
 	static nn_integer nn_new(uintptr_t length) {
+#if ENABLE_TLSF
 		nn_integer p = (nn_integer) static_allocator().malloc(get_size(length));
+#else
+        nn_integer p = (nn_integer) std::malloc(get_size(length));
+#endif
 
 		if( p != nullptr )
 			new (p) nn_integer_data(1, length);
@@ -172,10 +152,14 @@ typedef class nn_integer_data {
 	}
 
 	void release() {
-		if( --ref_count_ == 0 ){
+        if( --ref_count_ == 0 ){
             this->~nn_integer_data();
-			static_allocator().free(this);
-		}
+#if ENABLE_TLSF
+            static_allocator().free(this);
+#else
+            std::free(this);
+#endif
+        }
 	}
 
 	sword isign() const {
@@ -714,7 +698,7 @@ constexpr T hex_string(const char (&input)[length])
 
 constexpr auto Y = hex_string<std::array<std::uint8_t, 3>>("ABCDEF");
 
-#if _MSC_VER
+#if __GNUC__ < 5 || _MSC_VER
 template <typename T> constexpr const T uint_max(const T m = T(1))
 {
 	return (m << 3) + (m << 1) > m ? uint_max<T>((m << 3) + (m << 1)) : m;
@@ -763,8 +747,10 @@ extern const nn_integer_data nn_maxull(uint_max<umaxword_t>());
 static inline nn_integer nn_new(uintptr_t length)
 {
 	nn_integer p = nn_integer_data::nn_new(length);
-	if( p == nullptr )
+
+    if( p == nullptr || length == 0 )
 		throw std::bad_alloc();
+
 	return p;
 }
 //------------------------------------------------------------------------------

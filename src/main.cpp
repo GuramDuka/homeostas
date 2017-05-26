@@ -40,7 +40,8 @@ int main(int argc,char ** argv)
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QGuiApplication app(argc, argv);
 
-    qmlRegisterType<DirectoryTracker>("com.homeostas.directorytracker", 1, 0, "QDirectoryTracker");
+    //qmlRegisterType<DirectoryTracker>("com.homeostas.directorytracker", 1, 0, "QDirectoryTracker");
+    //qmlRegisterType<DirectoriesTrackersModel>("Backend", 1, 0, "DirectoriesTrackersModel");
 
     QQmlApplicationEngine engine;
 
@@ -48,12 +49,16 @@ int main(int argc,char ** argv)
     engine.rootContext()->setContextProperty("homeostas", &homeostas);
     HomeostasConfiguration homeostasConfiguration;
     engine.rootContext()->setContextProperty("homeostasConfiguration", &homeostasConfiguration);
+    DirectoriesTrackersModel directoriesTrackersModel;
+    engine.rootContext()->setContextProperty("directoriesTrackersModel", &directoriesTrackersModel);
+
+    homeostas.startTrackers();
+    homeostas.startServer();
 
     engine.load(QUrl(QLatin1String("qrc:/main.qml")));
+    QFontDatabase::addApplicationFont(QLatin1String("qrc:/digital-7.ttf"));
 
-    QFontDatabase::addApplicationFont("qrc:/digital-7.ttf");
-
-    qDebug() << homeostas.newUniqueId();
+    std::qerr << homeostas.newUniqueId().toStdString() << std::endl;
 
     return app.exec();
 }

@@ -28,7 +28,7 @@
 #pragma once
 //------------------------------------------------------------------------------
 #if _MSC_VER
-#pragma execution_character_set("utf-8")
+#   pragma execution_character_set("utf-8")
 #endif
 //------------------------------------------------------------------------------
 //#if _WIN32
@@ -44,8 +44,12 @@
 //#endif
 //#define CPPX_U CPPX_WITH_SYSCHAR_PREFIX
 //------------------------------------------------------------------------------
-#if !defined(_WIN32)
-#include <unistd.h>
+#if _WIN32
+#   include <winsock2.h>
+#   include <ws2tcpip.h>
+#   include <windows.h>
+#else
+#   include <unistd.h>
 #endif
 //------------------------------------------------------------------------------
 #if !defined(HAVE_READDIR_R)
@@ -380,9 +384,14 @@ static __inline__ uint64_t le64dec(const void *pp)
 //------------------------------------------------------------------------------
 #if __cplusplus
 //------------------------------------------------------------------------------
+#include <ctime>
+#include <climits>
 #include <cinttypes>
 #include <cstdint>
-#include <future>
+//------------------------------------------------------------------------------
+#if __GNUC__ > 0 && __GNUC__ < 5
+#define UINT64_C(x) (x ## ULL)
+#endif
 //------------------------------------------------------------------------------
 namespace homeostas {
 struct leave_uninitialized_type {};

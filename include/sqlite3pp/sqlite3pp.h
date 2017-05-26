@@ -39,6 +39,7 @@
 //#include <variant>
 #include <vector>
 #include <unordered_map>
+#include <memory>
 
 #include "sqlite/sqlite3.h"
 

@@ -31,15 +31,15 @@
 #include <io.h>
 #include <share.h>
 #endif
-#include <ctime>
-#include <cerrno>
-#include <cstring>
 #if _WIN32
 #include <process.h>
-#include <windows.h>
 #else
 #include <dirent.h>
 #endif
+#include <atomic>
+#include <ctime>
+#include <cerrno>
+#include <cstring>
 //------------------------------------------------------------------------------
 #if defined(_S_IFDIR) && !defined(S_IFDIR)
 #define S_IFDIR _S_IFDIR

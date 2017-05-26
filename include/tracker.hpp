@@ -64,6 +64,14 @@ class directory_tracker {
             shutdown();
         }
 
+        directory_tracker() {}
+
+        directory_tracker(
+            const std::string & dir_user_defined_name,
+            const std::string & dir_path_name) :
+            dir_user_defined_name_(dir_user_defined_name),
+            dir_path_name_(dir_path_name) {}
+
         const auto & dir_user_defined_name() const {
             return dir_user_defined_name_;
         }

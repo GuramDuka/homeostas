@@ -3,5 +3,11 @@
         <file>main.qml</file>
         <file>qtquickcontrols2.conf</file>
         <file>digital-7.ttf</file>
+        <file>DirectoriesTrackersView.qml</file>
+        <file>SectionDelegate.qml</file>
+        <file>DirectoryTrackerDelegate.qml</file>
+        <file>PlusButton.qml</file>
+        <file>DirectoryTrackerDialog.qml</file>
+        <file>DirectoryTrackerForm.qml</file>
     </qresource>
 </RCC>

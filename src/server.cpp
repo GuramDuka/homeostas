@@ -23,61 +23,120 @@
  */
 //------------------------------------------------------------------------------
 #include "scope_exit.hpp"
+#include "socket.hpp"
 #include "server.hpp"
+//#include "dlib/assert.h"
+//#include "dlib/sockets.h"
+//#include "dlib/iosockstream.h"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
+void tcp_server::incomingConnection(qintptr socket)
+{
+    server_->incoming_connection(socket);
+}
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+void server::incoming_connection(qintptr socket)
+{
+    pool_->enqueue([=] {
+        worker(socket);
+    });
+}
+//------------------------------------------------------------------------------
 void server::listener()
 {
+    server_->setParent(nullptr);
+    server_->moveToThread(QThread::currentThread());
+
     while( !shutdown_ ) {
         if( !server_->isListening() )
             if( !server_->listen(QHostAddress::Any, 65535) )
-                qDebug() << server_->errorString();
+                std::qerr << server_->errorString();
 
-        if( server_->waitForNewConnection(-1) )
-            pool_->enqueue(&server::worker, this, server_->nextPendingConnection());
+        //if( server_->waitForNewConnection(-1) )
+        //    pool_->enqueue([&] {
+        //        worker(server_->nextPendingConnection());
+        //    });
+            //pool_->start(new ThreadCallback([&] {
+            //    worker(server_->nextPendingConnection());
+            //}));
     }
 }
 //------------------------------------------------------------------------------
-void server::worker(QTcpSocket * socket)
+void server::worker(qintptr socket_handle)
 {
-    if( socket == nullptr )
+    QTcpSocket * socket = new QTcpSocket;
+
+    if( !socket->setSocketDescriptor(socket_handle, QAbstractSocket::ConnectedState, QIODevice::ReadWrite) ) {
+        std::qerr << socket->errorString();
         return;
+    }
 
-    QPointer<QTcpSocket> sock(socket);
+    //socket->setParent(nullptr);
+    //socket->moveToThread(QThread::currentThread());
+    QByteArray block;
+    QDataStream out(&block, QIODevice::WriteOnly);
+    out.setVersion(QDataStream::Qt_DefaultCompiledVersion);
+    out << QString::fromUtf8("0123456789");
+    socket->write(block);
+    socket->waitForBytesWritten(100);
 
-    at_scope_exit(
-        sock->disconnectFromHost();
-        sock->waitForDisconnected(100);
-        sock->close();
-    );
+    auto at_exit = [&] {
+        socket->disconnectFromHost();
+#ifndef _WIN32
+        socket->waitForDisconnected(100);
+#endif
+        socket->close();
+        delete socket;
+    };
+
+    at_scope_exit(at_exit());
 }
 //------------------------------------------------------------------------------
 void server::startup()
 {
+    if( server_ != nullptr )
+        return;
+
     shutdown_ = false;
-    server_ = new QTcpServer;
-    pool_.reset(new thread_pool);
-    thread_.reset(new std::thread(&server::listener, this));
+
+    {
+        active_socket s;
+        s.connect("myip.ru", "http");
+        s.recv();
+        std::qerr << std::string(s.data(), s.size()) << std::endl;
+    }
+
+    server_ = new tcp_server(this);
+
+    if( !server_->listen(QHostAddress::Any, 65535) )
+        std::qerr << server_->errorString();
+
+    //pool_.reset(new thread_pool<server_thread>);
+    pool_.reset(new thread_pool_t);
+    //pool_->enqueue([&] { listener(); });
 }
 //------------------------------------------------------------------------------
 void server::shutdown()
 {
-    if( thread_ == nullptr )
+    if( server_ == nullptr )
         return;
 
     std::unique_lock<std::mutex> lk(mtx_);
     shutdown_ = true;
+    server_->close();
     lk.unlock();
     cv_.notify_one();
 
-    server_->close();
-    thread_->join();
-    thread_ = nullptr;
-    server_ = nullptr;
+    //thread_->quit();
+    //thread_->wait();
+
     pool_ = nullptr;
+    server_ = nullptr;
 }
 //------------------------------------------------------------------------------
 } // namespace homeostas

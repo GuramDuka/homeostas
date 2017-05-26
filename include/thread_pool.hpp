@@ -41,6 +41,7 @@
 #include <functional>
 #include <stdexcept>
 #include <condition_variable>
+#include <type_traits>
 //------------------------------------------------------------------------------
 #include "std_ext.hpp"
 //------------------------------------------------------------------------------
@@ -48,19 +49,21 @@ namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
+template <typename T>
 class thread_pool {
     public:
         // the destructor joins all threads
         ~thread_pool() {
+            join();
+        }
+
+        void join() {
             std::unique_lock<std::mutex> lock(queue_mutex_);
             stop_ = true;
             lock.unlock();
             condition_.notify_all();
-
-            for( auto & p : workers_ ) {
-                p.second->join();
-                delete p.second;
-            }
+            lock.lock();
+            condition_.wait(lock, [&] { return workers_.empty(); });
 
             for( auto p : dead_ ) {
                 p->join();
@@ -69,15 +72,22 @@ class thread_pool {
         }
 
         // the constructor just launches some amount of workers
-        thread_pool(size_t min_threads = 0) :
-            min_threads_(min_threads), stop_(false) {
+        thread_pool(size_t min_threads = 0, size_t max_threads = 0) :
+            min_threads_(min_threads),
+            max_threads_(max_threads),
+            idle_threads_(0),
+            stop_(false)
+        {
             if( min_threads_ == 0 )
                 min_threads_ = std::thread::hardware_concurrency();
+            if( max_threads_ == 0 )
+                max_threads_ = min_threads_ * 2;
         }
 
         // add new work item to the pool
         template <class F, class... Args>
-        auto enqueue(F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type>
+        auto enqueue(F&& f, Args&&... args)
+            -> std::future<typename std::result_of<F(Args...)>::type>
         {
             using return_type = typename std::result_of<F(Args...)>::type;
             auto task = std::make_shared<std::packaged_task<return_type()> >(
@@ -93,8 +103,20 @@ class thread_pool {
 
             tasks_.emplace([task] { (*task)(); });
 
-            if( idle_threads_ == 0 || workers_.size() < min_threads_ ) {
-                std::unique_ptr<std::thread> worker(new std::thread([&] {
+            auto need_new_thread =
+                idle_threads_ < tasks_.size()
+                    && workers_.size() < max_threads_;
+
+            if( need_new_thread ) {
+                std::unique_ptr<max_align_t> worker_ptr(
+                    new max_align_t [sizeof(T) / sizeof(max_align_t)
+                        + (sizeof(T) % sizeof(max_align_t) ? 1 : 0)]);
+                T * p_worker = reinterpret_cast<T *>(worker_ptr.get());
+
+                new (p_worker) T([&] (T * a_worker) {
+                    static thread_local T * p_this_thread = nullptr;
+                    p_this_thread = a_worker;
+
                     for(;;) {
                         std::unique_lock<std::mutex> lock(queue_mutex_);
 
@@ -103,11 +125,11 @@ class thread_pool {
                         auto deadline = now + 30s;
                         idle_threads_++;
 
-                        if( condition_.wait_until(lock, deadline, [&] { return stop_ || !tasks_.empty(); }) ) {
+                        auto wait_result = condition_.wait_until(lock, deadline, [&] {
+                            return stop_ || !tasks_.empty();
+                        });
 
-                            if( stop_ && tasks_.empty() )
-                                break;
-
+                        if( !tasks_.empty() ) {
                             std::function<void()> task = std::move(tasks_.front());
                             tasks_.pop();
 
@@ -116,25 +138,35 @@ class thread_pool {
 
                             task();
                         }
-                        else { // timeout
+                        else if( !wait_result || stop_ ) { // timeout
                             idle_threads_--;
 
-                            if( workers_.size() > min_threads_ ) {
-                                auto tid = std::this_thread::get_id();
-                                dead_.emplace_back(workers_[tid]);
-                                workers_.erase(tid);
+                            if( stop_ || workers_.size() > min_threads_ ) {
+                                auto it = workers_.find(p_this_thread);
+
+                                if( it == workers_.end() )
+                                    throw std::runtime_error("undefined behavior in thread pool");
+
+                                dead_.emplace_back(it->second);
+                                workers_.erase(it);
+
+                                if( stop_ ) {
+                                    lock.unlock();
+                                    condition_.notify_one();
+                                }
                                 break;
                             }
                         }
                     }
-                }));
+                }, p_worker);
 
-                workers_.emplace(std::make_pair(worker->get_id(), worker.get()));
+                std::unique_ptr<T> worker(p_worker);
+                workers_.emplace(std::make_pair(p_worker, p_worker));
                 worker.release();
             }
 
             while( !dead_.empty() ) {
-                std::unique_ptr<std::thread> p(dead_.back());
+                std::unique_ptr<T> p(dead_.back());
                 dead_.pop_back();
                 p->join();
             }
@@ -146,11 +178,12 @@ class thread_pool {
         }
     private:
         size_t min_threads_;
+        size_t max_threads_;
         size_t idle_threads_;
         // need to keep track of threads so we can join them
-        std::unordered_map<std::thread::id, std::thread *> workers_;
+        std::unordered_map<T *, T *> workers_;
         // dead threads by idle timeout
-        std::vector<std::thread *> dead_;
+        std::vector<T *> dead_;
         // the task queue
         std::queue<std::function<void()>> tasks_;
 
@@ -159,6 +192,8 @@ class thread_pool {
         std::condition_variable condition_;
         bool stop_;
 };
+//------------------------------------------------------------------------------
+typedef thread_pool<std::thread> thread_pool_t;
 //------------------------------------------------------------------------------
 namespace tests {
 //------------------------------------------------------------------------------

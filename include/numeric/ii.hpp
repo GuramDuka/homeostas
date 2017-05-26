@@ -35,10 +35,12 @@ namespace nn {  // namespace NaturalNumbers
 class integer {
 	friend class numeric;
 	public:
+#if ENABLE_STATISTICS
 		static uintptr_t stat_iadd_;
 		static uintptr_t stat_isub_;
 		static uintptr_t stat_imul_;
 		static uintptr_t stat_idiv_;
+#endif
 
 		~integer(){
 			proxy_->release();
@@ -54,6 +56,13 @@ class integer {
 			proxy_ = p->add_ref();
 			return r;
 		}
+
+        integer(const void * data, size_t size) :
+            proxy_(nn_new(size / sizeof(word) + (size % sizeof(word) ? 1 : 0)))
+        {
+            proxy_->data_[proxy_->length_] = proxy_->data_[proxy_->length_ - 1] = 0;
+            memcpy(proxy_->data_, data, size);
+        }
 
 		integer() : integer((long long) 0) {}
 		integer(int v) : integer((long long) v) {}
@@ -103,7 +112,9 @@ class integer {
 		integer & operator = (const numeric & v);
 
 		integer operator + (const integer & v) const {
-			stat_iadd_++;
+#if ENABLE_STATISTICS
+            stat_iadd_++;
+#endif
 			return proxy_->iadd(v.proxy_);
 		}
 
@@ -112,7 +123,9 @@ class integer {
 		}
 
 		integer operator - (const integer & v) const {
-			stat_isub_++;
+#if ENABLE_STATISTICS
+            stat_isub_++;
+#endif
 			return proxy_->isub(v.proxy_);
 		}
 
@@ -124,17 +137,37 @@ class integer {
 			return proxy_->isal(bit_count);
 		}
 
+        template <typename T>
+        integer operator << (const T & bit_count) const {
+            return proxy_->isal(uintptr_t(bit_count));
+        }
+
 		integer & operator <<= (uintptr_t bit_count){
 			return *this = operator << (bit_count);
 		}
+
+        template <typename T>
+        integer & operator <<= (const T & bit_count){
+            return *this = operator << (uintptr_t(bit_count));
+        }
 
 		integer operator >> (uintptr_t bit_count) const {
 			return proxy_->isar(bit_count);
 		}
 
+        template <typename T>
+        integer operator >> (const T & bit_count) const {
+            return proxy_->isar(uintptr_t(bit_count));
+        }
+
 		integer & operator >>= (uintptr_t bit_count){
 			return *this = operator >> (bit_count);
 		}
+
+        template <typename T>
+        integer & operator >>= (const T & bit_count){
+            return *this = operator >> (uintptr_t(bit_count));
+        }
 
 		integer operator * (const integer & v) const;
 		integer & operator *= (const integer & v){
@@ -240,6 +273,74 @@ class integer {
 			return is_zero();
 		}
 
+        operator int () {
+            int v = 0;
+            memcpy(&v, proxy_->data_, imin(proxy_->length_ * sizeof(word), sizeof(int)));
+            return v;
+        }
+
+        operator unsigned int () {
+            unsigned int v = 0;
+            memcpy(&v, proxy_->data_, imin(proxy_->length_ * sizeof(word), sizeof(unsigned int)));
+            return v;
+        }
+
+        operator long () {
+            long v = 0;
+            memcpy(&v, proxy_->data_, imin(proxy_->length_ * sizeof(word), sizeof(long)));
+            return v;
+        }
+
+        operator unsigned long () {
+            unsigned long v = 0;
+            memcpy(&v, proxy_->data_, imin(proxy_->length_ * sizeof(word), sizeof(unsigned long)));
+            return v;
+        }
+
+        operator long long () {
+            long long v = 0;
+            memcpy(&v, proxy_->data_, imin(proxy_->length_ * sizeof(word), sizeof(long long)));
+            return v;
+        }
+
+        operator unsigned long long () {
+            unsigned long long v = 0;
+            memcpy(&v, proxy_->data_, imin(proxy_->length_ * sizeof(word), sizeof(unsigned long long)));
+            return v;
+        }
+
+#if _MSC_VER || HAVE_LONG_DOUBLE
+        operator double () {
+            long long v = 0;
+            memcpy(&v, proxy_->data_, imin(proxy_->length_ * sizeof(word), sizeof(long long)));
+            return double(v);
+        }
+
+        operator long double () {
+            long long v = 0;
+            memcpy(&v, proxy_->data_, imin(proxy_->length_ * sizeof(word), sizeof(long long)));
+            return (long double) v;
+        }
+#elif defined(LONG_DOUBLE)
+        operator double () {
+            long long v = 0;
+            memcpy(&v, proxy_->data_, imin(proxy_->length_ * sizeof(word), sizeof(long long)));
+            return v;
+        }
+
+        operator LONG_DOUBLE () {
+            long long v = 0;
+            memcpy(&v, proxy_->data_, imin(proxy_->length_ * sizeof(word), sizeof(long long)));
+            return v;
+        }
+#else
+        operator double () {
+            long long v = 0;
+            memcpy(&v, proxy_->data_, imin(proxy_->length_ * sizeof(word), sizeof(long long)));
+            return v;
+        }
+#endif
+
 		friend std::ostream & operator << (std::ostream & out, const nn::integer & v);
 
 		void base8digits(std::string & s,const bool keep_leading_zeros = false) const;
@@ -247,9 +348,9 @@ class integer {
 		void base10string(std::string & s,const bool keep_leading_zeros = false) const;
 		void base16string(std::string & s,const bool uppercase = false) const;
 
-		const std::string to_string(uintptr_t width = 0,uintptr_t base = 10) const;
+        std::string to_string(uintptr_t width = 0,uintptr_t base = 10) const;
 
-		operator const std::string () const {
+        operator std::string () const {
 			return to_string();
 		}
 
@@ -268,7 +369,8 @@ class integer {
 			return sign() < 0;
 		}
 
-		bool is_zero() const;
+        bool is_notz() const;
+        bool is_zero() const;
 		bool is_one() const;
 		bool is_ten() const;
 
@@ -318,6 +420,14 @@ class integer {
 
 		static integer pow(uintptr_t power, uintptr_t base);
 		static integer factorial(uintptr_t degree);
+
+        const void * data() const {
+            return proxy_->data_;
+        }
+
+        size_t size() const {
+            return proxy_->length_ * sizeof(word);
+        }
 
 	protected:
 		mutable nn_integer proxy_;
@@ -372,10 +482,12 @@ class integer {
 		integer tmul_v(const integer & v) const;
 };
 //------------------------------------------------------------------------------
+#if ENABLE_STATISTICS
 uintptr_t integer::stat_iadd_ = 0;
 uintptr_t integer::stat_isub_ = 0;
 uintptr_t integer::stat_imul_ = 0;
 uintptr_t integer::stat_idiv_ = 0;
+#endif
 //------------------------------------------------------------------------------
 #if _MSC_VER || HAVE_LONG_DOUBLE
 inline integer::integer(double v) : integer((long double) v) {}
@@ -399,11 +511,11 @@ inline integer::integer(double v) : integer(0)
   for( ipart = fabs(ipart); ipart >= 1; ipart /= 10 ){
 #endif
 #if _MSC_VER || HAVE_MODFL || _GLIBCXX_HAVE_MODFL
-    m = fmodl(ipart,10);
+    m = fmodl(ipart, 10);
 #else
-    m = fmod(ipart,10);
+    m = fmod(ipart, 10);
 #endif
-    *this += power * sword(m);
+    *this += power * integer(int(m));
     power *= integer(10);
   }
 
@@ -473,7 +585,7 @@ inline integer::integer(const std::string & s) : integer(0)
 				break;
 
 			if( isdigit(*i) ){
-				*this += m * (*i - '0');
+                *this += m * integer(*i - '0');
 				m *= integer(10);
 			}
 			else {
@@ -572,17 +684,17 @@ inline void integer::base10string(std::string & s,const bool keep_leading_zeros)
 			//  using decimal arithmetic.
 			//--------------------------------------------------------------
 
-			for (intptr_t m = k + 1; m >= 0; m--) {
-				char difference = digit_array_ptr[m] - subtrahend_ptr[m];
+            for( intptr_t m = k + 1; m >= 0; m-- ) {
+                int difference = int(digit_array_ptr[m]) - int(subtrahend_ptr[m]);
 
-				if (difference < 0) {
-					digit_array_ptr[m] = difference + 10;
+                if( difference < 0 ) {
+                    digit_array_ptr[m] = char(difference + 10);
 
 					if (m - 1 >= 0)
 						digit_array_ptr[m - 1] -= 1;
 				}
 				else {
-					digit_array_ptr[m] = difference;
+                    digit_array_ptr[m] = char(difference);
 				}
 			}
 		}
@@ -658,7 +770,7 @@ inline void integer::base16string(std::string & s,bool uppecase) const
 	}
 }
 //------------------------------------------------------------------------------
-inline const std::string integer::to_string(uintptr_t width,uintptr_t base) const
+inline std::string integer::to_string(uintptr_t width, uintptr_t base) const
 {
 	if( is_zero() )
 		return "0";
@@ -802,6 +914,21 @@ inline integer integer::unique() const
 	memcpy(result->data_, proxy_->data_, sizeof(word) * (result->length_ + 2));
 
 	return result;
+}
+//------------------------------------------------------------------------------
+inline bool integer::is_notz() const
+{
+    if( proxy_ == &nn_izero )
+        return false;
+
+    if( proxy_->z() ){
+        nn_izero.add_ref();
+        proxy_->release();
+        proxy_ = const_cast<nn_integer>(&nn_izero);
+        return false;
+    }
+
+    return true;
 }
 //------------------------------------------------------------------------------
 inline bool integer::is_zero() const
@@ -1131,6 +1258,8 @@ inline std::ostream & operator << (std::ostream & out, const nn::integer & v)
 //	return r;
 //}
 //------------------------------------------------------------------------------
+#if ENABLE_MULTITHREADED_MULTIPLICATION
+//------------------------------------------------------------------------------
 static const auto thread_hardware_concurrency = std::thread::hardware_concurrency();
 static ThreadPool pool(thread_hardware_concurrency);
 //------------------------------------------------------------------------------
@@ -1239,15 +1368,21 @@ inline integer integer::tmul_v(const integer & v) const
 	return s;
 }
 //------------------------------------------------------------------------------
+#endif
+//------------------------------------------------------------------------------
 inline integer integer::operator * (const integer & v) const
 {
-	stat_imul_++;
+#if ENABLE_STATISTICS
+    stat_imul_++;
+#endif
 
-	if( thread_hardware_concurrency > 1 && proxy_->length_ >= thread_hardware_concurrency ) {
+#if ENABLE_MULTITHREADED_MULTIPLICATION
+    if( thread_hardware_concurrency > 1 && proxy_->length_ >= thread_hardware_concurrency ) {
         if( proxy_->length_ <= 4096 )
             return tmul_a<4096>(v);
 		return tmul_v(v);
 	}
+#endif
 
 	integer a(abs()), b(v.abs());
 
@@ -1264,7 +1399,9 @@ inline integer integer::operator * (const integer & v) const
 //------------------------------------------------------------------------------
 inline integer integer::operator / (const integer & v) const
 {
-	stat_idiv_++;
+#if ENABLE_STATISTICS
+    stat_idiv_++;
+#endif
 	return div(v);
 }
 //------------------------------------------------------------------------------

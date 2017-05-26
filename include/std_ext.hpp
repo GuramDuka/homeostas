@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <sstream>
 #include <QtDebug>
+#include <QString>
 //------------------------------------------------------------------------------
 namespace std {
 //------------------------------------------------------------------------------
@@ -44,7 +45,12 @@ class qdbgbuf : public stringbuf {
         virtual int sync() {
             // add this->str() to database here
             // (optionally clear buffer afterwards)
-            qDebug().nospace().noquote() << QString::fromStdString(this->str());
+            auto s = this->str();
+
+            if( !s.empty() && s.back() == '\n' )
+                s.pop_back();
+
+            qDebug().nospace().noquote() << QString::fromStdString(s);
             this->str(string());
             return 0;
         }
@@ -54,6 +60,10 @@ extern ostream qerr;
 //------------------------------------------------------------------------------
 inline ostream & operator << (ostream & os, const std::exception & e) {
     return os << e.what();
+}
+//------------------------------------------------------------------------------
+inline ostream & operator << (ostream & os, const QString & s) {
+    return os << s.toStdString();
 }
 //------------------------------------------------------------------------------
 template <typename T, typename T1, typename T2, typename T3> inline

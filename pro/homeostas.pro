@@ -37,6 +37,7 @@ CONFIG += c++14
 #}
 *msvc {
     isEmpty(QMAKE_CXXFLAGS_OPTIMIZE_FULL): QMAKE_CXXFLAGS_OPTIMIZE_FULL = -Ox
+    QMAKE_CFLAGS += -wd4996
 }
 
 #CONFIG -= c++11 c++14 c++1z
@@ -60,11 +61,23 @@ CONFIG(release, debug|release) {
 #message($$QMAKE_CXXFLAGS)
 #message($$QMAKE_CXXFLAGS_RELEASE)
 
+#message($$QT_ARCH)
+#contains(QT_ARCH, i386) {
+#    message("32-bit")
+#} else {
+#    message("64-bit")
+#}
+
 DEFINES += SQLITE_THREADSAFE=1
 #BUILD_DATE = $$system("date")
 #DEFINES += BUILD_DATE=$$BUILD_DATE
 #GIT_VERSION = $$system("git describe --always")
 #DEFINES += GIT_VERSION=$$GIT_VERSION
+
+win32 {
+    DEFINES += _WIN32_WINNT=0x0601 _CRT_SECURE_NO_WARNINGS
+    LIBS += -lws2_32
+}
 
 SOURCES += \
     ../src/cdc512.cpp \
@@ -86,7 +99,8 @@ SOURCES += \
     ../src/server.cpp \
     ../tests/client_test.cpp \
     ../tests/server_test.cpp \
-    ../tests/thread_pool_test.cpp
+    ../tests/thread_pool_test.cpp \
+    ../src/socket.cpp
 
 HEADERS += \
     ../include/cdc512.hpp \
@@ -106,20 +120,27 @@ HEADERS += \
     ../include/qobjects.hpp \
     ../include/client.hpp \
     ../include/server.hpp \
-    ../include/thread_pool.hpp
+    ../include/thread_pool.hpp \
+    ../include/numeric/id.hpp \
+    ../include/numeric/ii.hpp \
+    ../include/numeric/nn.hpp \
+    ../include/numeric/tlsf.hpp \
+    ../include/numeric/wk.hpp \
+    ../include/socket.hpp
 
 INCLUDEPATH += .
 INCLUDEPATH += ../include
 
-RC_FILE = ..//homeostas.rc
+RC_FILE = ../homeostas.rc
 
 RESOURCES += ../src/qml/qml.qrc
+RESOURCES += $$files(../src/qml/*.qml)
 
 # Additional import path used to resolve QML modules in Qt Creator's code model
-QML_IMPORT_PATH = ../src
+QML_IMPORT_PATH = ../src ../src/qml
 
 # Additional import path used to resolve QML modules just for Qt Quick Designer
-QML_DESIGNER_IMPORT_PATH = ../src
+QML_DESIGNER_IMPORT_PATH = ../src ../src/qml
 
 # The following define makes your compiler emit warnings if you use
 # any feature of Qt which as been marked deprecated (the exact warnings

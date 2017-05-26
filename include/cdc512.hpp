@@ -292,6 +292,8 @@ struct cdc512 : public cdc512_data {
         const char * abc = nullptr,
         char delimiter = '\0',
         size_t interval = 0) const;
+    void from_short_string(const std::string & s, const char * abc = nullptr);
+    void generate_entropy(std::vector<uint8_t> * p_entropy = nullptr);
     static std::string generate_prime();
 };
 //------------------------------------------------------------------------------

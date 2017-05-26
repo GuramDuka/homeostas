@@ -41,7 +41,6 @@
 #include <cstring>
 #if _WIN32
 #include <process.h>
-#include <windows.h>
 #else
 #include <dirent.h>
 #endif

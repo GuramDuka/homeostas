@@ -24,15 +24,15 @@
 //------------------------------------------------------------------------------
 #include "config.h"
 //------------------------------------------------------------------------------
+#include <random>
 #include <cstring>
 #include <iomanip>
 //------------------------------------------------------------------------------
+#include "numeric/ii.hpp"
 #include "cdc512.hpp"
-//------------------------------------------------------------------------------
-#ifndef NDEBUG
+#include "rand.hpp"
 #include "rand.hpp"
 #include "port.hpp"
-#endif
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
@@ -169,11 +169,9 @@ std::string cdc512::to_short_string(const char * abc, char delimiter, size_t int
     //        }
     //    }
 
-    integer<sizeof(digest)> a, d = l, mod;
+    nn::integer a(digest, sizeof(digest)), d = l, mod;
 
-    memcpy(a.data_, digest, sizeof(digest));
-
-    while( a ) {
+    while( a.is_notz() ) {
         a = a.div(l, &mod);
         s.push_back(abc[size_t(mod)]);
 
@@ -187,6 +185,71 @@ std::string cdc512::to_short_string(const char * abc, char delimiter, size_t int
         s.pop_back();
 
     return s;
+}
+//---------------------------------------------------------------------------
+void cdc512::from_short_string(const std::string & s, const char * abc)
+{
+    if( abc == nullptr )
+        abc = "._,=~!@#$%^&-+0123456789abcdefghijklmnopqrstuvwxyz";
+
+    size_t l = slen(abc);
+    nn::integer a(0), m(1);
+
+    for( const auto & c : s ) {
+        const char * p = std::strchr(abc, c);
+
+        if( p == nullptr )
+            continue;
+
+        a += m * nn::integer(p - abc);
+        m *= l;
+    }
+
+    memcpy(digest, a.data(), nn::imin(a.size(), sizeof(digest)));
+}
+//---------------------------------------------------------------------------
+void cdc512::generate_entropy(std::vector<uint8_t> * p_entropy)
+{
+    std::vector<uint8_t> e, & entropy = p_entropy == nullptr ? e : *p_entropy;
+
+    typedef homeostas::rand<8, uint64_t> rand;
+    rand r;
+
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    auto clock_ns = 1000000000ull * ts.tv_sec + ts.tv_nsec;
+
+    while( clock_ns && entropy.size() < rand::srand_size ) {
+        uint8_t q = uint8_t(clock_ns & 0xff);
+        if( q != 0 )
+            entropy.push_back(clock_ns & 0xff);
+        clock_ns >>= 8;
+    }
+
+    std::random_device rd;
+    std::uniform_int_distribution<int> dist(1, 15);
+
+    while( entropy.size() < rand::srand_size )
+        entropy.push_back(dist(rd));
+
+    r.srand(&entropy[0], entropy.size());
+    r.warming();
+
+    rand::value_type v = 0;
+
+    for( auto & q : digest )
+        for(;;) {
+            if( v == 0 )
+                v = r.get();
+
+            if( (v & 0xf) != 0 && ((v >> 4) & 0xf) != 0 ) {
+                q = v & 0xff;
+                v >>= 8;
+                break;
+            }
+
+            v >>= 8;
+        }
 }
 //---------------------------------------------------------------------------
 #ifndef NDEBUG

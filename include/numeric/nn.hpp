@@ -208,7 +208,7 @@ class numeric {
 		//numeric & normalize(uintptr_t threshold = 32, int how = 1);
 		numeric & normalize(int how = 1);
 
-		const std::string stat_length() const {
+        std::string stat_length() const {
 			std::stringstream s;
 			s << numerator_.proxy_->length_ << ", " << denominator_.proxy_->length_;
 			return s.str();

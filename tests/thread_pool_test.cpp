@@ -35,7 +35,7 @@ void thread_pool_test()
     bool fail = false;
 
     try {
-        thread_pool pool;
+        thread_pool_t pool;
     }
     catch (const std::exception & e) {
         std::qerr << e << std::endl;

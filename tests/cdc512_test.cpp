@@ -65,6 +65,15 @@ void cdc512_test()
 
         if( ctx2.to_string() != "F949-444B-1638-C935-595B-23F2-4BB3-6BD7-5410-0260-AA14-A09F-236B-AEDE-0527-1DE6-F059-FB91-848F-548C-B731-7700-84C2-EAE0-8FF0-B39D-B967-FA24-903E-762A-2EB0-8286" )
 			throw std::runtime_error("bad cdc512 implementation");
+
+        ctx1.generate_entropy();
+        const auto s1 = ctx1.to_short_string("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", '-', 9);
+        ctx2.from_short_string(s1, "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+        const auto s2 = ctx2.to_short_string("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", '-', 9);
+
+        if( s1 != s2 )
+            throw std::runtime_error("bad cdc512 implementation");
+
 	}
     catch (const std::exception & e) {
         std::qerr << e << std::endl;

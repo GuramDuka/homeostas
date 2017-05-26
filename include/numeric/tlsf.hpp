@@ -39,19 +39,21 @@
 #endif
 //------------------------------------------------------------------------------
 #ifdef EMSCRIPTEN
-#include <unistd.h>
-#define _isatty isatty
-#define _fileno fileno
+#   include <unistd.h>
+#   define _isatty isatty
+#   define _fileno fileno
 #elif _WIN32
-#include <windows.h>
-#include <io.h>
+#   include <io.h>
 #endif
-#include <immintrin.h>
-#include <emmintrin.h>
+#if __GNUC__ >= 5 || _MSC_VER
+#   include <immintrin.h>
+#   include <emmintrin.h>
+#endif
 #include <cstddef>
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <cassert>
@@ -119,7 +121,7 @@ namespace tlsf {  // Two Level Segregated Fit memory allocator
 ** gcc 3.4 and above have builtin support, specialized for architecture.
 ** Some compilers masquerade as gcc; patchlevel test filters them out.
 */
-#if defined (__GNUC__) && (__GNUC__ > 3 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 4)) \
+#if defined (__GNUC__) && (__GNUC__ > 3 || (__GNUC__ == 3 && __GNUG_MINOR__ >= 4)) \
 	&& defined (__GNUC_PATCHLEVEL__)
 
 inline int tlsf_ffs(unsigned int word)

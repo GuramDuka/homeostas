@@ -24,6 +24,9 @@
 //------------------------------------------------------------------------------
 #include <iostream>
 //------------------------------------------------------------------------------
+#include <QtDebug>
+#include <QNetworkInterface>
+//------------------------------------------------------------------------------
 #include "server.hpp"
 #include "client.hpp"
 //------------------------------------------------------------------------------
@@ -36,6 +39,19 @@ void server_test()
     bool fail = false;
 
     try {
+        for( auto iface : QNetworkInterface::allInterfaces() ) {
+            std::qerr
+                << "if: " << iface.humanReadableName().toStdString()
+                << " " << iface.name().toStdString()
+                << std::endl;
+            std::qerr << "     hardware: " << iface.hardwareAddress().toStdString() << std::endl;
+
+            for( auto addr : iface.addressEntries() ) {
+                std::qerr << "           ip: " << addr.ip().toString().toStdString() << std::endl;
+                std::qerr << "         mask: " << addr.netmask().toString().toStdString() << std::endl;
+                std::qerr << "    broadcast: " << addr.broadcast().toString().toStdString() << std::endl;
+            }
+        }
     }
     catch (const std::exception & e) {
         std::qerr << e << std::endl;
