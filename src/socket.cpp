@@ -22,89 +22,16 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
-#include <mutex>
 #include "socket.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
-////////////////////////////////////////////////////////////////////////////////
-//------------------------------------------------------------------------------
 #if _WIN32
-static WSADATA wsa_data;
-static std::mutex wsa_mutex;
-static std::atomic_uint wsa_count(0);
-static volatile bool wsa_started = false;
+std::mutex base_socket::mtx_;
+WSADATA base_socket::wsa_data_;
+std::atomic_uint base_socket::wsa_count_(0);
+volatile bool base_socket::wsa_started_ = false;
 #endif
-//------------------------------------------------------------------------------
-base_socket & base_socket::open(int socket_domain, int socket_type, int socket_protocol)
-{
-    if( is_socket_valid() )
-        close();
-
-    errno = SocketSuccess;
-
-#if _WIN32
-    wsa_count++;
-
-    if( !wsa_started ) {
-        std::unique_lock<std::mutex> lock(wsa_mutex);
-
-        if( !wsa_started ) {
-            memset(&wsa_data, 0, sizeof(wsa_data));
-
-            if( WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0 ) {
-                wsa_count--;
-                throw std::runtime_error(str_error(SocketInvalidSocket));
-            }
-
-            wsa_started = true;
-        }
-    }
-#endif
-
-    if( (socket_ = ::socket(socket_domain, socket_type, socket_protocol)) == INVALID_SOCKET ) {
-        translate_socket_error();
-#if _WIN32
-        if( --wsa_count == 0 ) {
-            std::unique_lock<std::mutex> lock(wsa_mutex);
-            WSACleanup();
-            wsa_started = false;
-        }
-#endif
-        throw std::runtime_error(str_error());
-    }
-
-    socket_domain_  = (decltype(socket_domain_)) socket_domain;
-    socket_type_    = (decltype(socket_type_)) socket_type;
-
-    return *this;
-}
-//------------------------------------------------------------------------------
-base_socket & base_socket::close(bool no_trow)
-{
-    buffer_ = nullptr;
-
-    if( is_socket_valid() ) {
-        if( ::close(socket_) != SocketError ) {
-            socket_ = INVALID_SOCKET;
-#if _WIN32
-            if( --wsa_count == 0 ) {
-                std::unique_lock<std::mutex> lock(wsa_mutex);
-                WSACleanup();
-                wsa_started = false;
-            }
-#endif
-        }
-        else if( no_trow ){
-            translate_socket_error();
-        }
-        else {
-            throw_socket_error();
-        }
-    }
-
-    return *this;
-}
 //------------------------------------------------------------------------------
 } // namespace homeostas
 //------------------------------------------------------------------------------

@@ -36,10 +36,17 @@ class integer {
 	friend class numeric;
 	public:
 #if ENABLE_STATISTICS
-		static uintptr_t stat_iadd_;
+#   if DISABLE_ATOMIC_COUNTER
+        static uintptr_t stat_iadd_;
 		static uintptr_t stat_isub_;
 		static uintptr_t stat_imul_;
 		static uintptr_t stat_idiv_;
+#   else
+        static std::atomic_uintptr_t stat_iadd_;
+        static std::atomic_uintptr_t stat_isub_;
+        static std::atomic_uintptr_t stat_imul_;
+        static std::atomic_uintptr_t stat_idiv_;
+#   endif
 #endif
 
 		~integer(){
@@ -483,10 +490,17 @@ class integer {
 };
 //------------------------------------------------------------------------------
 #if ENABLE_STATISTICS
-uintptr_t integer::stat_iadd_ = 0;
-uintptr_t integer::stat_isub_ = 0;
-uintptr_t integer::stat_imul_ = 0;
-uintptr_t integer::stat_idiv_ = 0;
+#   if DISABLE_ATOMIC_COUNTER
+        static uintptr_t integer::stat_iadd_ = 0;
+        static uintptr_t integer::stat_isub_ = 0;
+        static uintptr_t integer::stat_imul_ = 0;
+        static uintptr_t integer::stat_idiv_ = 0;
+#   else
+        static std::atomic_uintptr_t integer::stat_iadd_(0);
+        static std::atomic_uintptr_t integer::stat_isub_(0);
+        static std::atomic_uintptr_t integer::stat_imul_(0);
+        static std::atomic_uintptr_t integer::stat_idiv_(0);
+#   endif
 #endif
 //------------------------------------------------------------------------------
 #if _MSC_VER || HAVE_LONG_DOUBLE
@@ -1112,7 +1126,7 @@ inline std::ostream & operator << (std::ostream & out, const nn::integer & v)
 		if( out.flags() & std::ios_base::showbase )
 			out << "0x";
 		std::string s;
-		v.base16string(s,(out.flags() & std::ios_base::uppercase) != 0);
+        v.base16string(s, (out.flags() & std::ios_base::uppercase) != 0);
 		out << s;
 	}
 	else if( out.flags() & std::ios_base::oct ){
@@ -1129,7 +1143,7 @@ inline std::ostream & operator << (std::ostream & out, const nn::integer & v)
 		else if( v.is_neg() ){
 			out << '-';
 		}
-		out << v.abs().to_string(out.width(),10);
+        out << v.abs().to_string(uintptr_t(out.width()), 10);
 	}
 	return out;
 }

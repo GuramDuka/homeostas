@@ -66,6 +66,10 @@ inline ostream & operator << (ostream & os, const QString & s) {
     return os << s.toStdString();
 }
 //------------------------------------------------------------------------------
+inline string operator + (const string & s1, const char * s2) {
+    return s1 + string(s2);
+}
+//------------------------------------------------------------------------------
 template <typename T, typename T1, typename T2, typename T3> inline
 T str_replace(const T1 & subject, const T2 & search, const T3 & replace) {
     T s;
@@ -126,10 +130,10 @@ void copy_eof(std::ostream & out, std::istream & in) {
 	}
 }
 //------------------------------------------------------------------------------
-#if __GNUC__ < 5
+#if __GNUC__ > 0 && __GNUC__ < 5
 //------------------------------------------------------------------------------
-template <typename T> inline std::string to_string(const T & v) {
-    std::stringstream s;
+template <typename T> inline string to_string(const T & v) {
+    stringstream s;
     s << v;
     return s.str();
 }
@@ -167,6 +171,33 @@ H ihash(InputIt first, InputIt last) {
     h += h << 14;
 
     return h;
+}
+//------------------------------------------------------------------------------
+inline uint64_t rhash(uint64_t x) {
+    x ^= UINT64_C(0xf7f7f7f7f7f7f7f7);
+    x *= UINT64_C(0x8364abf78364abf7);
+    x = (x << 26) | (x >> 38);
+    x ^= UINT64_C(0xf00bf00bf00bf00b);
+    x *= UINT64_C(0xf81bc437f81bc437);
+    return x;
+}
+
+inline uint32_t rhash(uint32_t x) {
+    x ^= 0xf7f7f7f7;
+    x *= 0x8364abf7;
+    x = (x << 13) | (x >> 19);
+    x ^= 0xf00bf00b;
+    x *= 0xf81bc437;
+    return x;
+}
+
+inline uint16_t rhash(uint16_t x) {
+    x ^= 0xf7f7;
+    x *= 0xabf7;
+    x = (x << 7) | (x >> 9);
+    x ^= 0xf00b;
+    x *= 0xc437;
+    return x;
 }
 //------------------------------------------------------------------------------
 } // namespace std

@@ -19,6 +19,7 @@ CONFIG += c++14
         contains(CXX_VERSION, "5.[0-9]\\.?[0-9,x]?") {
             #message("g++ version 5.x found")
             QMAKE_GNUC = 5
+            CONFIG += c++1y
         }
         else {
             contains(CXX_VERSION, "4.[0-9]\\.?[0-9,x]?") {
@@ -36,8 +37,10 @@ CONFIG += c++14
 #contains(QMAKE_COMPILER, "msvc") {
 #}
 *msvc {
+    CONFIG += c++17
     isEmpty(QMAKE_CXXFLAGS_OPTIMIZE_FULL): QMAKE_CXXFLAGS_OPTIMIZE_FULL = -Ox
     QMAKE_CFLAGS += -wd4996
+    QMAKE_CXXFLAGS += -std:c++latest
 }
 
 #CONFIG -= c++11 c++14 c++1z
@@ -100,7 +103,9 @@ SOURCES += \
     ../tests/client_test.cpp \
     ../tests/server_test.cpp \
     ../tests/thread_pool_test.cpp \
-    ../src/socket.cpp
+    ../src/socket.cpp \
+    ../tests/socket_test.cpp \
+    ../src/thread_pool.cpp
 
 HEADERS += \
     ../include/cdc512.hpp \

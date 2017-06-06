@@ -32,6 +32,7 @@
 #include "thread_pool.hpp"
 #include "server.hpp"
 #include "client.hpp"
+#include "socket.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
@@ -43,6 +44,7 @@ void run_tests()
     cdc512_test();
     rand_test();
     thread_pool_test();
+	socket_test();
     //indexer_test();
     tracker_test();
 	client_test();

@@ -104,13 +104,6 @@ void server::startup()
 
     shutdown_ = false;
 
-    {
-        active_socket s;
-        s.connect("myip.ru", "http");
-        s.recv();
-        std::qerr << std::string(s.data(), s.size()) << std::endl;
-    }
-
     server_ = new tcp_server(this);
 
     if( !server_->listen(QHostAddress::Any, 65535) )

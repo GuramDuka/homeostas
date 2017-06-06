@@ -438,9 +438,9 @@ void directory_indexer::reindex(
     db.exceptions(true);
 
     db.execute_all(R"EOS(
-        CREATE TABLE IF NOT EXISTS lfsr (
+        CREATE TABLE IF NOT EXISTS rowids (
             id              INTEGER PRIMARY KEY ON CONFLICT REPLACE,
-            lfsr    		INTEGER NOT NULL
+            counter    		INTEGER NOT NULL
         ) WITHOUT ROWID;
 
         CREATE TABLE IF NOT EXISTS entries (
@@ -460,7 +460,7 @@ void directory_indexer::reindex(
             AFTER INSERT
             ON entries
         BEGIN
-            REPLACE INTO lfsr(id, lfsr) VALUES (1, new.id);
+            REPLACE INTO rowids(id, counter) VALUES (1, new.id);
         END;
 
         CREATE TRIGGER IF NOT EXISTS entries_after_delete_trigger
@@ -483,12 +483,12 @@ void directory_indexer::reindex(
         CREATE UNIQUE INDEX IF NOT EXISTS i3 ON blocks_digests (entry_id, block_no);
     )EOS");
 
-    uint64_t lfsr_counter = [&] {
+    uint64_t row_next_id = [&] {
         sqlite3pp::query st(db, R"EOS(
             SELECT
-                lfsr
+                counter
             FROM
-                lfsr
+                rowids
             WHERE
                 id = :id
         )EOS");
@@ -497,11 +497,7 @@ void directory_indexer::reindex(
 
         auto i = st.begin();
 
-        if( !i )
-            return uint64_t(1);
-
-        return i->get<uint64_t>(0);
-
+        return std::rhash(i ? i->get<uint64_t>(0) : 0) + 1;
     }();
 
     sqlite3pp::query st_sel(db, R"EOS(
@@ -706,12 +702,13 @@ void directory_indexer::reindex(
         }
         else {
             if( id == 0 ) {
-                auto next_id = db.shift_lfsr(lfsr_counter);
+                auto next_id = std::rhash(row_next_id);
                 st_ins.bind("id", next_id);
                 bind(st_ins);
                 st_ins.execute();
                 //if( st_ins.execute(SQLITE_CONSTRAINT_UNIQUE) != SQLITE_CONSTRAINT_UNIQUE )
-                lfsr_counter = id = next_id;
+                id = next_id;
+                row_next_id++;
             }
             else {
                 bind(st_upd);

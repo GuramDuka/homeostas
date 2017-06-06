@@ -208,6 +208,16 @@ void cdc512::from_short_string(const std::string & s, const char * abc)
     memcpy(digest, a.data(), nn::imin(a.size(), sizeof(digest)));
 }
 //---------------------------------------------------------------------------
+void cdc512::generate_fast_entropy()
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    init();
+    update(&ts, sizeof(ts));
+    finish();
+}
+//---------------------------------------------------------------------------
 void cdc512::generate_entropy(std::vector<uint8_t> * p_entropy)
 {
     std::vector<uint8_t> e, & entropy = p_entropy == nullptr ? e : *p_entropy;

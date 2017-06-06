@@ -24,6 +24,7 @@
 //------------------------------------------------------------------------------
 #include <QtDebug>
 //------------------------------------------------------------------------------
+#include "locale_traits.hpp"
 #include "cdc512.hpp"
 #include "port.hpp"
 #include "qobjects.hpp"
@@ -55,9 +56,9 @@ void HomeostasConfiguration::connect_db()
         )EOS").execute_all();
 
         sqlite3pp::command(*db, R"EOS(
-            CREATE TABLE IF NOT EXISTS lfsr (
+            CREATE TABLE IF NOT EXISTS rowids (
                 id              INTEGER PRIMARY KEY ON CONFLICT REPLACE,
-                lfsr    		INTEGER NOT NULL
+                counter    		INTEGER NOT NULL
             ) WITHOUT ROWID;
 
             CREATE TABLE IF NOT EXISTS config (
@@ -76,7 +77,7 @@ void HomeostasConfiguration::connect_db()
                 AFTER INSERT
                 ON config
             BEGIN
-                REPLACE INTO lfsr(id, lfsr) VALUES (1, new.id);
+                REPLACE INTO rowids(id, counter) VALUES (1, new.id);
             END;
 
             CREATE UNIQUE INDEX IF NOT EXISTS i1 ON config (parent_id, name);
@@ -124,12 +125,12 @@ void HomeostasConfiguration::connect_db()
                 value_s     = :value_s
         )EOS"));
 
-        lfsr_counter_ = [&] {
+        row_next_id_ = [&] {
             sqlite3pp::query st(*db, R"EOS(
                 SELECT
-                    lfsr
+                    counter
                 FROM
-                    lfsr
+                    rowids
                 WHERE
                     id = :id
             )EOS");
@@ -138,10 +139,7 @@ void HomeostasConfiguration::connect_db()
 
             auto i = st.begin();
 
-            if( !i )
-                return uint64_t(1);
-
-            return i->get<uint64_t>(0);
+            return std::rhash(i ? i->get<uint64_t>(0) : 0) + 1;
         }();
 
         db_.reset(db.release());
@@ -192,7 +190,7 @@ uint64_t HomeostasConfiguration::getVarParentId(const char * varName, const char
     uint64_t pid = 0;
     bool pid_valid = true;
     const char * p = varName;
-    char * n = (char *) alloca((strlen(varName) + 1) * sizeof(char));
+    char * n = (char *) alloca((homeostas::slen(varName) + 1) * sizeof(char));
 
     while( *p != '\0' && pid_valid ) {
         const char * a = p;
@@ -301,10 +299,9 @@ void HomeostasConfiguration::setVar(uint64_t pid, const char * varName, const QV
         bindex(*st_upd_);
     }
     else {
-        uint64_t id = db_->shift_lfsr(lfsr_counter_);
-        st_ins_->bind("id", id);
+        st_ins_->bind("id", std::rhash(row_next_id_));
         bindex(*st_ins_);
-        lfsr_counter_ = id;
+        row_next_id_++;
     }
 }
 //------------------------------------------------------------------------------
@@ -332,7 +329,7 @@ void HomeostasConfiguration::setVar(const char * varName, const QVariant & val)
                     pid = i->get<uint64_t>("id");
                 }
                 else {
-                    uint64_t id = db_->shift_lfsr(lfsr_counter_);
+                    uint64_t id = std::rhash(row_next_id_);
 
                     st_ins_->bind("id", id);
                     st_ins_->bind("parent_id", pid);
@@ -344,7 +341,8 @@ void HomeostasConfiguration::setVar(const char * varName, const QVariant & val)
                     st_ins_->bind("value_s", nullptr);
                     st_ins_->execute();
 
-                    lfsr_counter_ = pid = id;
+                    pid = id;
+                    row_next_id_++;
                 }
 
                 p = a + 1;
@@ -361,9 +359,9 @@ void HomeostasConfiguration::setVar(const char * varName, const QVariant & val)
     setVar(pid, p, val);
 }
 //------------------------------------------------------------------------------
-HomeostasConfiguration::VarNode HomeostasConfiguration::getVarTree(const char * varName)
+HomeostasConfiguration::var_node HomeostasConfiguration::getVarTree(const char * varName)
 {
-    VarNode var;
+    var_node var;
 
     bool pid_valid = true;
     const char * p = nullptr;
@@ -373,15 +371,22 @@ HomeostasConfiguration::VarNode HomeostasConfiguration::getVarTree(const char * 
         var.name = QString::fromUtf8(p);
         var.value = getVar(pid, p, nullptr, &var.id);
 
-        std::function<void (VarNode &)> g = [&] (VarNode & var) {
+        std::function<void (var_node &)> g = [&] (var_node & var) {
             st_sel_by_pid_->bind("parent_id", var.id);
 
             for( auto i = st_sel_by_pid_->begin(); i; ++i ) {
                 const auto name = QString::fromUtf8(i->get<const char *>("name"));
+
+                if( var.childs == nullptr )
+                    var.childs.reset(new var_node::childs_type);
+
                 var.childs->emplace(std::make_pair(
-                   name, VarNode(i->get<uint64_t>("id"), name, getVar(i))
+                   name, var_node(i->get<uint64_t>("id"), name, getVar(i))
                 ));
             }
+
+            if( var.empty() )
+                return;
 
             for( auto & i : var )
                 g(i.second);

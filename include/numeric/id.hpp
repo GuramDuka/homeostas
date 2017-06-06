@@ -100,10 +100,10 @@ typedef class nn_integer_data {
             }
         }
 
-#if ENABLE_ATOMIC_COUNTER
-        mutable std::atomic_uintptr_t ref_count_;
-#else
+#if DISABLE_ATOMIC_COUNTER
         mutable uintptr_t ref_count_;
+#else
+        mutable std::atomic_uintptr_t ref_count_;
 #endif
         mutable uintptr_t length_;
 #if SIZEOF_WORD == 1

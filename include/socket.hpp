@@ -62,9 +62,24 @@
 #include <net/if.h>
 #endif
 //------------------------------------------------------------------------------
+#include <cassert>
+#include <type_traits>
+#include <string>
 #include <atomic>
+#include <mutex>
 #include <memory>
+#include <array>
+#include <new>
+#include <ios>
+#include <iomanip>
+#include <streambuf>
+#include <istream>
+#include <ostream>
+#include <iostream>
+#include <algorithm>
+#include <locale>
 //------------------------------------------------------------------------------
+#include "locale_traits.hpp"
 #include "std_ext.hpp"
 #include "scope_exit.hpp"
 //------------------------------------------------------------------------------
@@ -86,11 +101,22 @@ namespace homeostas {
     constexpr int SOCKET_ERROR = -1;
 #endif
 
-constexpr int SOCKET_ERROR_INTERUPT = EINTR;
-constexpr int SOCKET_ERROR_TIMEDOUT = EAGAIN;
-constexpr int TX_MAX_BYTES = 32 * 1024;
-constexpr int RX_MAX_BYTES = 16 * 1024;
-constexpr int MIN_BUFFER_SIZE = 32;
+constexpr int SOCKET_ERROR_INTERRUPT = EINTR;
+constexpr int SOCKET_ERROR_TIMEDOUT  = EAGAIN;
+
+// https://en.wikipedia.org/wiki/Maximum_segment_size
+constexpr size_t TX_MAX_BYTES = 1220;
+constexpr size_t RX_MAX_BYTES = 1220;
+
+// http://en.cppreference.com/w/cpp/thread/hardware_destructive_interference_size
+// portable way to access the L1 data cache line size.
+constexpr size_t MIN_BUFFER_SIZE =
+#if __cplusplus > 201402L
+    std::hardware_destructive_interference_size
+#else
+    64
+#endif
+    ;
 
 #ifndef INVALID_SOCKET
 constexpr SOCKET INVALID_SOCKET = (SOCKET) -1;
@@ -98,56 +124,116 @@ constexpr SOCKET INVALID_SOCKET = (SOCKET) -1;
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-struct inet_addr {
-    union {
-        in_addr                 addr4;      // IPv4 address
-        in_addr6                addr6;      // IPv6 address
-    };
-};
+//struct inet_addr {
+//    union {
+//        in_addr                 addr4;      // IPv4 address
+//        in_addr6                addr6;      // IPv6 address
+//    };
+//};
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 struct socket_addr {
     union {
+        sockaddr_storage        storage;
         sockaddr_in             saddr4;      // IPv4 address
         sockaddr_in6            saddr6;      // IPv6 address
     };
 
     const auto & family() const {
-        return saddr4.sin_family;
+        return storage.ss_family;
     }
 
     template <typename T>
     socket_addr & family(const T & family) {
-        saddr4.sin_family = decltype(saddr4.sin_family) (family);
+        storage.ss_family = decltype(storage.ss_family) (family);
         return *this;
     }
 
     const auto & port() const {
-        return saddr4.sin_port;
+        return storage.ss_family == AF_INET6 ? saddr6.sin6_port : saddr4.sin_port;
     }
 
     template <typename T>
     socket_addr & port(const T & port) {
-        saddr4.sin_port = decltype(saddr4.sin_port) (port);
+        if( storage.ss_family == AF_INET )
+            saddr4.sin_port = decltype(saddr4.sin_port) (port);
+        else if( storage.ss_family == AF_INET6 )
+            saddr6.sin6_port = decltype(saddr6.sin6_port) (port);
         return *this;
     }
 
     const void * addr_data() const {
-        return saddr4.sin_family == AF_INET ? (const void *) &saddr4.sin_addr :
-            saddr4.sin_family == AF_INET6 ? (const void *) &saddr6.sin6_addr : nullptr;
+        return storage.ss_family == AF_INET ? (const void *) &saddr4.sin_addr :
+            storage.ss_family == AF_INET6 ? (const void *) &saddr6.sin6_addr : nullptr;
     }
 
     void * addr_data() {
-        return saddr4.sin_family == AF_INET ? (void *) &saddr4.sin_addr :
-            saddr4.sin_family == AF_INET6 ? (void *) &saddr6.sin6_addr : nullptr;
+        return storage.ss_family == AF_INET ? (void *) &saddr4.sin_addr :
+            storage.ss_family == AF_INET6 ? (void *) &saddr6.sin6_addr : nullptr;
     }
 
     socklen_t addr_size() const {
-        return saddr4.sin_family == AF_INET ? sizeof(saddr4.sin_addr) :
-            saddr4.sin_family == AF_INET6 ? sizeof(saddr6.sin6_addr) : 0;
+        return storage.ss_family == AF_INET ? sizeof(saddr4.sin_addr) :
+            storage.ss_family == AF_INET6 ? sizeof(saddr6.sin6_addr) : 0;
+    }
+
+    socklen_t size() const {
+        return storage.ss_family == AF_INET ? sizeof(saddr4) :
+            storage.ss_family == AF_INET6 ? sizeof(saddr6) : 0;
+    }
+
+    std::string addr_str() const {
+        char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+        auto r = getnameinfo((const sockaddr *) this, sizeof(*this), hbuf, sizeof(hbuf), sbuf,
+                sizeof(sbuf), NI_NUMERICHOST | NI_NUMERICSERV);
+        return std::string(r != 0 ? "" : hbuf);
     }
 };
+//------------------------------------------------------------------------------
+} // namespace homeostas
+//------------------------------------------------------------------------------
+namespace std {
+//------------------------------------------------------------------------------
+inline string to_string(const homeostas::socket_addr & addr) {
+    char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+    auto r = getnameinfo((const sockaddr *) &addr, socklen_t(sizeof(addr)),
+        hbuf, socklen_t(sizeof(hbuf)),
+        sbuf, socklen_t(sizeof(sbuf)),
+        NI_NUMERICHOST | NI_NUMERICSERV);
+
+    if( r != 0 )
+        return string();
+
+    return string(hbuf) + ":" + sbuf;
+}
+//------------------------------------------------------------------------------
+inline string to_string(const homeostas::socket_addr & addr, bool no_throw) {
+    char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+    auto r = getnameinfo((const sockaddr *) &addr, socklen_t(sizeof(addr)),
+        hbuf, socklen_t(sizeof(hbuf)),
+        sbuf, socklen_t(sizeof(sbuf)),
+        NI_NUMERICHOST | NI_NUMERICSERV);
+
+    if( r != 0 && !no_throw )
+        throw std::runtime_error(
+#if _WIN32
+#   if QT_CORE_LIB
+            QString::fromWCharArray(gai_strerrorW(r)).toStdString()
+#   else
+            gai_strerrorA(r)
+#   endif
+#else
+            gai_strerror(r)
+#endif
+        );
+
+    return string(hbuf) + ":" + sbuf;
+}
+//------------------------------------------------------------------------------
+} // namespace std
+//------------------------------------------------------------------------------
+namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
@@ -166,106 +252,186 @@ typedef enum {
     SocketTypeRaw = SOCK_RAW
 } SocketType;
 //------------------------------------------------------------------------------
-struct socket_addr_t : public socket_addr {
-    SocketType type;
-};
-//------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 class base_socket {
 public:
     typedef enum {
-        Receives    = SHUT_RD,
-        Sends       = SHUT_WR,
-        Both        = SHUT_RDWR
+        ShutdownRD      = SHUT_RD,
+        ShutdownWR      = SHUT_WR,
+        ShutdownRDWR    = SHUT_RDWR
     } ShutdownMode;
 
     typedef enum {
-        SocketError = SOCKET_ERROR,//< Generic socket error translates to error below.
-        SocketSuccess = 0,         //< No socket error.
-        SocketInvalidSocket,       //< Invalid socket handle.
-        SocketInvalidAddress,      //< Invalid destination address specified.
-        SocketInvalidPort,         //< Invalid destination port specified.
-        SocketConnectionRefused,   //< No server is listening at remote address.
-        SocketTimedout,            //< Timed out while attempting operation.
-        SocketEwouldblock,         //< Operation would block if socket were blocking.
-        SocketNotconnected,        //< Currently not connected.
-        SocketEinprogress,         //< Socket is non-blocking and the connection cannot be completed immediately
-        SocketInterrupted,         //< Call was interrupted by a signal that was caught before a valid connection arrived.
-        SocketConnectionAborted,   //< The connection has been aborted.
-        SocketProtocolError,       //< Invalid protocol for operation.
-        SocketFirewallError,       //< Firewall rules forbid connection.
-        SocketInvalidSocketBuffer, //< The receive buffer point outside the process's address space.
-        SocketConnectionReset,     //< Connection was forcibly closed by the remote host.
-        SocketAddressInUse,        //< Address already in use.
-        SocketInvalidPointer,      //< Pointer type supplied as argument is invalid.
-        SocketEunknown             //< Unknown error
+        SocketError = SOCKET_ERROR,// Generic socket error translates to error below.
+        SocketSuccess = 0,         // No socket error.
+        SocketInvalid,             // Invalid socket handle.
+        SocketInvalidAddress,      // Invalid destination address specified.
+        SocketInvalidPort,         // Invalid destination port specified.
+        SocketConnectionRefused,   // No server is listening at remote address.
+        SocketTimedout,            // Timed out while attempting operation.
+        SocketEWouldblock,         // Operation would block if socket were blocking.
+        SocketNotConnected,        // Currently not connected.
+        SocketEInprogress,         // Socket is non-blocking and the connection cannot be completed immediately
+        SocketInterrupted,         // Call was interrupted by a signal that was caught before a valid connection arrived.
+        SocketConnectionAborted,   // The connection has been aborted.
+        SocketProtocolError,       // Invalid protocol for operation.
+        SocketFirewallError,       // Firewall rules forbid connection.
+        SocketInvalidSocketBuffer, // The receive buffer point outside the process's address space.
+        SocketConnectionReset,     // Connection was forcibly closed by the remote host.
+        SocketAddressInUse,        // Address already in use.
+        SocketInvalidPointer,      // Pointer type supplied as argument is invalid.
+        SocketAddrNotAvail,
+        SocketEUnknown             // Unknown error
     } SocketErrors;
 
 public:
-    ~base_socket() {
-        close(true);
+
+    ~base_socket() noexcept {
+        exceptions_ = false;
+        close();
+
+#if _WIN32
+        if( --wsa_count_ == 0 ) {
+            std::unique_lock<std::mutex> lock(mtx_);
+            WSACleanup();
+            wsa_started_ = false;
+        }
+#endif
     }
 
-    base_socket() :
-        socket_(INVALID_SOCKET),
-        socket_errno_(SocketInvalidSocket),
-        buffer_size_(0),
-        //socket_domain_(SocketDomainInvalid),
-        socket_type_(SocketTypeInvalid),
-        bytes_received_(0),
-        bytes_sent_(0),
-        socket_flags_(0)
-	{
+    // move constructor
+    base_socket(base_socket && o) noexcept {
+        *this = std::move(o);
     }
 
-    base_socket & open(int socket_domain, int socket_type, int socket_protocol = 0);
-
-    base_socket & open(SocketDomain socket_domain = SocketDomainINET, SocketType socket_type = SocketTypeTcp, int socket_protocol = 0) {
-        return open(socket_domain, socket_type, socket_protocol);
-    }
-
-    base_socket & close(bool no_trow = false);
-
-    base_socket & shutdown(ShutdownMode nShutdown = Sends) {
-        if( ::shutdown(socket_, nShutdown) == SocketError )
-            throw_socket_error();
+    // Move assignment operator
+    base_socket & operator = (base_socket && o) noexcept {
+        if( this != &o ) {
+            std::memmove(this, &o, sizeof(o));
+            o.socket_ = INVALID_SOCKET;
+        }
         return *this;
     }
 
-    bool select(int32_t nTimeoutSec = 0, int32_t nTimeoutUSec = 0) {
-        bool            bRetVal = false;
-        struct timeval *pTimeout = NULL;
-        struct timeval  timeout;
-        int32_t         nNumDescriptors = -1;
-        int32_t         nError = 0;
+    base_socket() noexcept :
+        socket_(INVALID_SOCKET),
+        socket_errno_(SocketInvalid),
+        socket_domain_(SocketDomainInvalid),
+        socket_type_(SocketTypeInvalid),
+        socket_flags_(0),
+        is_multicast_(false),
+        exceptions_(true),
+        interrupt_(false)
+    {
+#if _WIN32
+        wsa_count_++;
 
-        fd_set error_fds, read_fds, write_fds;
+        if( !wsa_started_ ) {
+            std::unique_lock<std::mutex> lock(mtx_);
 
-        FD_ZERO(&error_fds);
-        FD_ZERO(&read_fds);
-        FD_ZERO(&write_fds);
-        FD_SET(socket_, &error_fds);
-        FD_SET(socket_, &read_fds);
-        FD_SET(socket_, &write_fds);
+            if( !wsa_started_ ) {
+                memset(&wsa_data_, 0, sizeof(wsa_data_));
+
+                if( WSAStartup(MAKEWORD(2, 2), &wsa_data_) != 0 ) {
+                    wsa_count_--;
+                    throw_translate_socket_error();
+                }
+
+                wsa_started_ = true;
+            }
+        }
+#endif
+    }
+
+    base_socket & open(int socket_domain, int socket_type, int socket_protocol = 0) {
+        if( valid() )
+            close();
+
+        errno = SocketSuccess;
+
+        if( (socket_ = ::socket(socket_domain, socket_type, socket_protocol)) == INVALID_SOCKET ) {
+            throw_translate_socket_error();
+            return *this;
+        }
+
+        socket_domain_  = decltype(socket_domain_) (socket_domain);
+        socket_type_    = decltype(socket_type_) (socket_type);
+
+        return *this;
+    }
+
+    base_socket & open(SocketDomain socket_domain = SocketDomainINET, SocketType socket_type = SocketTypeTcp, int socket_protocol = 0) {
+        return open(int(socket_domain), int(socket_type), int(socket_protocol));
+    }
+
+    base_socket & close() {
+        //std::unique_lock<std::mutex> lock(mtx_);
+
+        if( valid() ) {
+            ::shutdown(socket_, SHUT_RDWR);
+            auto r =
+#if _WIN32
+                ::closesocket
+#else
+                ::close
+#endif
+            (socket_);
+
+            if( r == 0 ) {
+                socket_ = INVALID_SOCKET;
+                socket_errno_ = SocketInvalid;
+            }
+            else {
+                translate_socket_error();
+            }
+        }
+
+        return *this;
+    }
+
+    base_socket & shutdown_socket() {
+        ::shutdown(socket_, SHUT_RDWR);
+        return *this;
+    }
+
+    base_socket & shutdown(ShutdownMode how = ShutdownWR) {
+        if( ::shutdown(socket_, how) == SocketError )
+            throw_translate_socket_error();
+        return *this;
+    }
+
+    bool select(uint64_t timeout_ns = ~uint64_t(0)) {
+        struct timeval * p_timeout = nullptr;
+        struct timeval   timeout;
 
         //---------------------------------------------------------------------
         // If timeout has been specified then set value, otherwise set timeout
         // to NULL which will block until a descriptor is ready for read/write
         // or an error has occurred.
         //---------------------------------------------------------------------
-        if( nTimeoutSec > 0 || nTimeoutUSec > 0 ) {
-            timeout.tv_sec = nTimeoutSec;
-            timeout.tv_usec = nTimeoutUSec;
-            pTimeout = &timeout;
+        if( timeout_ns != ~uint64_t(0) ) {
+            timeout.tv_sec = decltype(timeout.tv_sec) (timeout_ns / 1000000000ull);
+            timeout.tv_usec = decltype(timeout.tv_usec) (timeout_ns % 1000000000ull);
+            p_timeout = &timeout;
         }
 
-        nNumDescriptors = ::select(socket_ + 1, &read_fds, &write_fds, &error_fds, pTimeout);
+        bool r = false;
+        fd_set error_fds, read_fds, write_fds;
 
-        //----------------------------------------------------------------------
-        // Handle timeout
-        //----------------------------------------------------------------------
-        if( nNumDescriptors == 0 ) {
+        FD_ZERO(&error_fds);
+        FD_SET(socket_, &error_fds);
+        FD_ZERO(&read_fds);
+        FD_SET(socket_, &read_fds);
+        FD_ZERO(&write_fds);
+        FD_SET(socket_, &write_fds);
+
+        int n = ::select(1, &read_fds, &write_fds, &error_fds, p_timeout);
+
+        if( n == -1 ) {
+            throw_translate_socket_error();
+        }
+        if( n == 0 ) {
             socket_errno_ = SocketTimedout;
         }
         //----------------------------------------------------------------------
@@ -273,113 +439,139 @@ public:
         // socket error (SO_ERROR) to see if there is a pending error.
         //----------------------------------------------------------------------
         else if( FD_ISSET(socket_, &read_fds) || FD_ISSET(socket_, &write_fds) ) {
-            int32_t nLen = sizeof(nError);
+            int err = 0;
+            socklen_t l = sizeof(err);
 
-            if( getsockopt(socket_, SOL_SOCKET, SO_ERROR, (char *) &nError, &nLen) == 0 ) {
-                errno = nError;
-
-                if( nError == 0 )
-                    bRetVal = true;
+            if( getsockopt(socket_, SOL_SOCKET, SO_ERROR, (char *) &err, &l) != 0 ) {
+                throw_translate_socket_error();
             }
-
-            translate_socket_error();
+            else if( err == 0 ) {
+                socket_errno_ = SocketSuccess;
+                r = true;
+            }
         }
 
-        return bRetVal;
+        return r;
     }
 
-    bool is_socket_valid() const {
+    bool valid() const {
         return socket_ != INVALID_SOCKET;
     }
 
-    intptr_t recv(size_t bytesToRecv = ~size_t(0), size_t maxRecv = RX_MAX_BYTES) {
-        bytes_received_ = 0;
+    bool invalid() const {
+        return socket_ == INVALID_SOCKET;
+    }
 
-        //--------------------------------------------------------------------------
-        // If the socket is invalid then return false.
-        //--------------------------------------------------------------------------
-        if( !is_socket_valid() )
-            return bytes_received_;
+    size_t recv(void * buffer, size_t size = ~size_t(0), size_t max_recv = RX_MAX_BYTES) {
+        size_t bytes_received = 0;
+        socklen_t as = is_multicast_ ? sizeof(multicast_group_.sin_addr) : sizeof(local_addr_);
 
-        auto next_buffer_size = [this] {
-            return buffer_size_ >= MIN_BUFFER_SIZE ? buffer_size_ << 1 : MIN_BUFFER_SIZE;
-        };
+        // if size == 0 recv one chunk of any size
 
-        auto expand_buffer = [&] {
-            if( buffer_size_ < bytes_received_ + maxRecv ) {
-                auto nbs = next_buffer_size();
-                std::unique_ptr<uint8_t> new_buf(new uint8_t [nbs]);
-                memcpy(new_buf.get(), buffer_.get(), bytes_received_);
-                buffer_.swap(new_buf);
-                buffer_size_ = nbs;
-            }
-        };
+        for(;;) {
+            int nb = int(std::min(size, std::min(size_t(std::numeric_limits<int>::max()), max_recv)));
 
-        socket_errno_ = SocketSuccess;
-        socklen_t as = is_multicast_ ? sizeof(multicast_group_.sin_addr) : local_addr_.addr_size();
+            if( nb == 0 )
+                nb = int(std::min(size_t(std::numeric_limits<int>::max()), max_recv));
 
-        while( bytesToRecv > 0 ) {
-            int nb = int(bytesToRecv > maxRecv ? maxRecv : bytesToRecv);
             intptr_t r = 0;
 
             for(;;) {
-                expand_buffer();
-
-                auto pWorkBuffer = (char *) (buffer_.get() + bytes_received_);
-
                 switch( socket_type_ ) {
-                    //----------------------------------------------------------------------
-                    // If zero bytes are received, then return.  If SocketERROR is
-                    // received, free buffer and return CSocket::SocketError (-1) to caller.
-                    //----------------------------------------------------------------------
                     case SocketTypeTcp  :
-                        r = ::recv(socket_, pWorkBuffer, nb, socket_flags_);// MSG_WAITALL
+                        r = ::recv(socket_, (char *) buffer, nb, socket_flags_);// MSG_WAITALL
                         break;
                     case SocketTypeUdp  :
-                        r = ::recvfrom(socket_, pWorkBuffer, nb, 0,
+                        r = ::recvfrom(socket_, (char *) buffer, nb, socket_flags_,
                             (sockaddr *) (is_multicast_ ? &multicast_group_ : local_addr_.addr_data()), &as);
                         break;
                     default:
                         break;
                 }
 
-                if( r != SocketError || translate_socket_error() != SocketInterrupted )
+                if( r != SocketError )
                     break;
+
+                if( translate_socket_error() != SocketInterrupted ) {
+                    throw_socket_error();
+                    break;
+                }
             }
 
             if( r == SocketError || r == 0 )
                 break;
 
-            bytesToRecv -= r;
-            bytes_received_ += r;
+            bytes_received += r;
+
+            if( size == 0 )
+                break;
+
+            buffer = reinterpret_cast<uint8_t *>(buffer) + r;
+            size -= r;
         }
 
-        return bytes_received_;
+        socket_errno_ = SocketSuccess;
+
+        return bytes_received;
     }
 
-    size_t send(const uint8_t * pBuf, size_t bytesToSend, size_t maxSend = TX_MAX_BYTES) {
-        socket_errno_ = SocketSuccess;
-        bytes_sent_ = 0;
+    template <typename T,
+        typename = std::enable_if_t<
+            std::is_base_of<T, std::array<typename T::value_type, typename T::_Size>>::value
+        >
+    >
+    T recv(size_t size = 0) {
+        T buffer;
+        recv(buffer.data(), size, buffer.size() * sizeof(*buffer.data()));
+        return buffer; // RVO ?
+    }
 
-        if( !is_socket_valid() )
-            return bytes_sent_;
+    template <typename T,
+        typename = std::enable_if_t<
+            std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value ||
+            std::is_base_of<T, std::basic_string<typename T::value_type, typename T::traits_type, typename T::allocator_type>>::value
+        >
+    >
+    T recv(size_t size = ~size_t(0), size_t max_recv = RX_MAX_BYTES) {
+        T buffer;
+        T::value_type * buf = (T::value_type *) alloca(max_recv);
+        size_t buf_size = max_recv - (max_recv % sizeof(T::value_type));
+        buf_size *= sizeof(T::value_type);
 
-        socklen_t as = is_multicast_ ? sizeof(multicast_group_.sin_addr) : remote_addr_.addr_size();
+        for(;;) {
+            auto r = recv(buf, 0, buf_size);
 
-        while( bytesToSend > 0 ) {
-            int nb = int(bytesToSend > maxSend ? maxSend : bytesToSend);
+            if( r == SocketError || r == 0 )
+                break;
+
+            r -= r % sizeof(T::value_type);
+
+            buffer.append(buf, r);
+
+            if( size == 0 )
+                break;
+
+            size -= r;
+        }
+
+        return buffer; // RVO ?
+    }
+
+    size_t send(const void * buf, size_t size, size_t max_send = TX_MAX_BYTES) {
+        size_t bytes_sent = 0;
+        socklen_t as = is_multicast_ ? sizeof(multicast_group_.sin_addr) : sizeof(remote_addr_);
+
+        while( size > 0 ) {
+            int nb = int(std::min(size, max_send));
             intptr_t w = 0;
-            //---------------------------------------------------------
-            // Check error condition and attempt to resend if call
-            // was interrupted by a signal.
-            //---------------------------------------------------------
+
             for(;;) {
                 switch( socket_type_ ) {
                     case SocketTypeTcp  :
-                        w = ::send(socket_, (const char *) pBuf, nb, 0);
+                        w = ::send(socket_, (const char *) buf, nb, socket_flags_);
                         break;
                     case SocketTypeUdp  :
-                        w = ::sendto(socket_, (const char *) pBuf, nb, 0,
+                        w = ::sendto(socket_, (const char *) buf, nb, socket_flags_,
                             (const sockaddr *) (is_multicast_ ? &multicast_group_ : &remote_addr_.saddr4),
                             as);
                         break;
@@ -387,119 +579,98 @@ public:
                         break;
                 }
 
-                if( w != SocketError || translate_socket_error() != SocketInterrupted )
+                if( w != SocketError )
                     break;
+
+                if( translate_socket_error() != SocketInterrupted ) {
+                    throw_socket_error();
+                    break;
+                }
             }
 
             if( w == SocketError || w == 0 )
                 break;
 
-            bytesToSend -= w;
-            bytes_sent_ += w;
+            size -= w;
+            bytes_sent += w;
         }
 
-        return bytes_sent_;
+        socket_errno_ = SocketSuccess;
+
+        return bytes_sent;
 	}
 
-    size_t send(const struct iovec * sendVector, size_t nNumItems) {
+    size_t send(const char * s, size_t max_send = TX_MAX_BYTES) {
+        return send(s, slen(s), max_send);
+    }
+
+    template <typename T,
+        typename = std::enable_if_t<
+            std::is_base_of<T, std::basic_string<typename T::value_type, typename T::traits_type, typename T::allocator_type>>::value
+        >
+    >
+    size_t send(const T & s, size_t max_send = TX_MAX_BYTES) {
+        return send(s.data(), s.size() * T::value_type, max_send);
+    }
+
+    size_t send(const struct iovec * vec, size_t n) {
         socket_errno_ = SocketSuccess;
+        size_t bytes_sent = 0;
 #if _WIN32
-        size_t nBytesSent = 0;
-        //--------------------------------------------------------------------------
-        // Send each buffer as a separate send, windows does not support this
-        // function call.
-        //--------------------------------------------------------------------------
-        for( size_t i = 0; i < nNumItems; i++ ) {
-            auto nBytes = send((uint8_t *) sendVector[i].iov_base, sendVector[i].iov_len);
+        for( size_t i = 0; i < n; i++ ) {
+            auto n = send((uint8_t *) vec[i].iov_base, vec[i].iov_len);
 
             if( socket_errno_ != SocketSuccess )
                 break;
 
-            nBytesSent += nBytes;
+            bytes_sent += n;
         }
 
-        bytes_sent_ = nBytesSent;
 #else
-        bytes_sent_ = 0;
-
-        auto w = ::writev(socket_, sendVector, nNumItems);
+        auto w = ::writev(socket_, vec, n);
 
         if( w == SocketError)
-            TranslateSocketError();
+            translate_socket_error();
 
-        bytes_sent_ = w;
+        bytes_sent = w;
 #endif
-        return bytes_sent_;
+        return bytes_sent;
     }
 
-    const char * data() const {
-        return reinterpret_cast<const char *>(buffer_.get());
-    }
-
-    char * data() {
-        return reinterpret_cast<char *>(buffer_.get());
-    }
-
-    auto size() const {
-        return bytes_received_;
-    }
-
-    auto bytes_received() const {
-        return bytes_received_;
-    }
-
-    auto bytes_sent() const {
-        return bytes_sent_;
-    }
-
-    bool option_linger(bool bEnable, uint16_t nTime) {
-        bool bRetVal = false;
-
+    base_socket & option_linger(bool enable, uint16_t timeout) {
         linger l;
-        l.l_onoff = (bEnable == true) ? 1: 0;
-        l.l_linger = nTime;
+        l.l_onoff   = enable ? 1 : 0;
+        l.l_linger  = timeout;
 
-        if( setsockopt(socket_, SOL_SOCKET, SO_LINGER, (const char *) &l, sizeof(l)) == 0)
-            bRetVal = true;
+        if( setsockopt(socket_, SOL_SOCKET, SO_LINGER, (const char *) &l, sizeof(l)) != 0 )
+            throw_translate_socket_error();
 
-        translate_socket_error();
-
-        return bRetVal;
+        return *this;
     }
 
-    bool option_reuse_addr() {
-        bool  bRetVal = false;
-        int32_t nReuse  = IPTOS_LOWDELAY;
+    base_socket option_reuse_addr() {
+        int32_t nReuse = IPTOS_LOWDELAY;
 
-        if( setsockopt(socket_, SOL_SOCKET, SO_REUSEADDR, (char *) &nReuse, sizeof(int32_t)) == 0 )
-            bRetVal = true;
+        if( setsockopt(socket_, SOL_SOCKET, SO_REUSEADDR, (char *) &nReuse, sizeof(int32_t)) != 0 )
+            throw_translate_socket_error();
 
-        translate_socket_error();
-
-        return bRetVal;
+        return *this;
     }
 
-    bool multicast(bool bEnable, uint8_t multicastTTL) {
-		bool bRetVal = false;
-
+    base_socket & multicast(uint8_t multicast_ttl) {
         if( socket_type_ == SocketTypeUdp ) {
-            if( setsockopt(socket_, IPPROTO_IP, IP_MULTICAST_TTL, (const char *) &multicastTTL, sizeof(multicastTTL)) == SocketError ) {
-                translate_socket_error();
-				bRetVal = false;
+            if( setsockopt(socket_, IPPROTO_IP, IP_MULTICAST_TTL, (const char *) &multicast_ttl, sizeof(multicast_ttl)) != 0 ) {
+                throw_translate_socket_error();
 			}
             else {
-				bRetVal = true;
-                is_multicast_ = bEnable;
+                is_multicast_ = true;
             }
 		}
-        else {
-            socket_errno_ = SocketProtocolError;
-		}
 
-		return bRetVal;
+        return *this;
 	}
 
-    bool multicast() {
+    bool multicast() const {
         return is_multicast_;
     }
 
@@ -573,7 +744,7 @@ public:
         int32_t    nTempVal = 0;
 		socklen_t  nLen = 0;
 
-        if( is_socket_valid() ) {
+        if( valid() ) {
             if( getsockopt(socket_, IPPROTO_IP, IP_TOS, (char *) &nTempVal, &nLen) == SocketError )
                 translate_socket_error();
 
@@ -591,7 +762,7 @@ public:
 		nTempVal <<= 4;
 		nTempVal /= 4;
 
-        if( is_socket_valid() )
+        if( valid() )
             if( setsockopt(socket_, IPPROTO_IP, IP_TOS, (const char *) &nTempVal, sizeof(nTempVal)) == SocketError ) {
                 translate_socket_error();
 				bRetVal = false;
@@ -666,6 +837,55 @@ public:
 
 		return bRetVal;
 	}
+
+    const auto & exceptions() const {
+        return exceptions_;
+    }
+
+    base_socket & exceptions(bool exceptions) {
+        exceptions_ = exceptions;
+        return *this;
+    }
+
+    bool success() const {
+        return socket_errno_ == SocketSuccess;
+    }
+
+    bool fail() const {
+        return socket_errno_ != SocketSuccess;
+    }
+
+    operator bool () const {
+        return socket_errno_ == SocketSuccess;
+    }
+
+    const char * str_error() const {
+        return str_error(socket_errno_);
+    }
+
+    void throw_socket_error() {
+        if( exceptions_ )
+            throw std::runtime_error(str_error(socket_errno_));
+    }
+
+    void throw_socket_error(const std::string & msg) {
+        if( exceptions_ )
+            throw std::runtime_error(msg);
+    }
+
+    void throw_translate_socket_error() {
+        translate_socket_error();
+        throw_socket_error();
+    }
+
+    base_socket & interrupt(bool interrupt) {
+        interrupt_ = interrupt;
+        return *this;
+    }
+
+    auto interrupt() const {
+        return interrupt_;
+    }
 protected:
     uint32_t window_size(uint32_t nOptionName) {
 		uint32_t nTcpWinSize = 0;
@@ -683,7 +903,7 @@ protected:
             translate_socket_error();
 		}
         else {
-            socket_errno_ = SocketInvalidSocket;
+            socket_errno_ = SocketInvalid;
 		}
 
 		return nTcpWinSize;
@@ -698,7 +918,7 @@ protected:
                 translate_socket_error();
 		}
         else {
-            socket_errno_ = SocketInvalidSocket;
+            socket_errno_ = SocketInvalid;
 		}
 
 		return nWindowSize;
@@ -744,7 +964,7 @@ protected:
                 return "Generic socket error translates to error below.";
             case SocketSuccess:
                 return "No socket error.";
-            case SocketInvalidSocket:
+            case SocketInvalid:
                 return "Invalid socket handle.";
             case SocketInvalidAddress:
                 return "Invalid destination address specified.";
@@ -754,11 +974,11 @@ protected:
                 return "No server is listening at remote address.";
             case SocketTimedout:
                 return "Timed out while attempting operation.";
-            case SocketEwouldblock:
+            case SocketEWouldblock:
                 return "Operation would block if socket were blocking.";
-            case SocketNotconnected:
+            case SocketNotConnected:
                 return "Currently not connected.";
-            case SocketEinprogress:
+            case SocketEInprogress:
                 return "Socket is non-blocking and the connection cannot be completed immediately";
             case SocketInterrupted:
                 return "Call was interrupted by a signal that was caught before a valid connection arrived.";
@@ -776,20 +996,13 @@ protected:
                 return "Address already in use.";
             case SocketInvalidPointer:
                 return "Pointer type supplied as argument is invalid.";
-            case SocketEunknown:
+            case SocketAddrNotAvail:
+                return "Cannot assign requested address. The requested address is not valid in its context.";
+            case SocketEUnknown:
                 return "Unknown error";
             default:
                 return "No such CSimpleSocket error";
         }
-    }
-
-    const char * str_error() const {
-        return str_error(socket_errno_);
-    }
-
-    void throw_socket_error() {
-        if( translate_socket_error() != SocketSuccess )
-            throw std::runtime_error(str_error());
     }
 
     SocketErrors translate_socket_error() {
@@ -800,7 +1013,7 @@ protected:
                 break;
             case WSAEBADF:
             case WSAENOTCONN:
-                socket_errno_ = SocketNotconnected;
+                socket_errno_ = SocketNotConnected;
                 break;
             case WSAEINTR:
                 socket_errno_ = SocketInterrupted;
@@ -811,7 +1024,7 @@ protected:
             case WSAEMFILE:
             case WSAENOBUFS:
             case WSAEPROTONOSUPPORT:
-                socket_errno_ = SocketInvalidSocket;
+                socket_errno_ = SocketInvalid;
                 break;
             case WSAECONNREFUSED :
                 socket_errno_ = SocketConnectionRefused;
@@ -820,16 +1033,16 @@ protected:
                 socket_errno_ = SocketTimedout;
                 break;
             case WSAEINPROGRESS:
-                socket_errno_ = SocketEinprogress;
+                socket_errno_ = SocketEInprogress;
                 break;
             case WSAECONNABORTED:
                 socket_errno_ = SocketConnectionAborted;
                 break;
             case WSAEWOULDBLOCK:
-                socket_errno_ = SocketEwouldblock;
+                socket_errno_ = SocketEWouldblock;
                 break;
             case WSAENOTSOCK:
-                socket_errno_ = SocketInvalidSocket;
+                socket_errno_ = SocketInvalid;
                 break;
             case WSAECONNRESET:
                 socket_errno_ = SocketConnectionReset;
@@ -843,8 +1056,11 @@ protected:
             case WSAEFAULT:
                 socket_errno_ = SocketInvalidPointer;
                 break;
+            case WSAEADDRNOTAVAIL:
+                socket_errno_ = SocketAddrNotAvail;
+                break;
             default:
-                socket_errno_ = SocketEunknown;
+                socket_errno_ = SocketEUnknown;
                 break;
         }
 #else
@@ -853,7 +1069,7 @@ protected:
                 socket_errno_ = SocketSuccess;
                 break;
             case ENOTCONN:
-                socket_errno_ = SocketNotconnected;
+                socket_errno_ = SocketNotConnected;
                 break;
             case ENOTSOCK:
             case EBADF:
@@ -865,7 +1081,7 @@ protected:
             case ENOMEM:
             case EPROTONOSUPPORT:
             case EPIPE:
-                socket_errno_ = SocketInvalidSocket;
+                socket_errno_ = SocketInvalid;
                 break;
             case ECONNREFUSED :
                 socket_errno_ = SocketConnectionRefused;
@@ -874,11 +1090,11 @@ protected:
                 socket_errno_ = SocketTimedout;
                 break;
             case EINPROGRESS:
-                socket_errno_ = SocketEinprogress;
+                socket_errno_ = SocketEInprogress;
                 break;
             case EWOULDBLOCK:
                 //        case EAGAIN:
-                socket_errno_ = SocketEwouldblock;
+                socket_errno_ = SocketEWouldblock;
                 break;
             case EINTR:
                 socket_errno_ = SocketInterrupted;
@@ -901,23 +1117,52 @@ protected:
                 socket_errno_ = SocketConnectionReset;
                 break;
             default:
-                socket_errno_ = SocketEunknown;
+                socket_errno_ = SocketEUnknown;
                 break;
             }
 #endif
         return socket_errno_;
     }
 
+    static std::mutex mtx_;
+
+#if _WIN32
+    static WSADATA wsa_data_;
+    static std::atomic_uint wsa_count_;
+    static volatile bool wsa_started_;
+#endif
+
+    template <typename T, typename F>
+    static void move(T & t, T & o, F) {
+        std::memcpy(&t, &o, sizeof(o));
+        o.socket_ = INVALID_SOCKET;
+    }
+
+    template <typename T, typename F,
+        typename = std::enable_if_t<std::is_function<F>::value>>
+    static T & move(T & t, T & o, F f) {
+        if( &t != &o ) {
+            move(t, o, nullptr);
+            f();
+        }
+        return t;
+    }
+
+    template <typename T>
+    static T & move(T & t, T & o) {
+        if( &t != &o )
+            move(t, o, nullptr);
+        return t;
+    }
+
     SOCKET                      socket_;            // socket handle
     SocketErrors                socket_errno_;      // number of last error
-    std::unique_ptr<uint8_t>    buffer_;            // internal send/receive buffer
-    size_t                      buffer_size_;       // size of internal send/receive buffer
     SocketDomain                socket_domain_;     // socket type AF_INET, AF_INET6
     SocketType                  socket_type_;       // socket type - UDP, TCP or RAW
-    size_t                      bytes_received_;    // number of bytes received
-    size_t                      bytes_sent_;        // number of bytes sent
-    uint32_t                    socket_flags_;      // socket flags
+    int                         socket_flags_;      // socket flags
     bool                        is_multicast_;      // is the UDP socket multicast;
+    bool                        exceptions_;
+    bool                        interrupt_;
     socket_addr                 remote_addr_;
     socket_addr                 local_addr_;
     sockaddr_in                 multicast_group_;
@@ -934,12 +1179,22 @@ class active_socket : public base_socket {
 public:
     friend class passive_socket;
 
-    ~active_socket() {
-        close();
+    // move constructor
+    active_socket(active_socket && o) noexcept {
+        *this = std::move(o);
+    }
+
+    // Move assignment operator
+    active_socket & operator = (active_socket && o) noexcept {
+        return move(*this, o);
     }
 
     active_socket(SocketType socket_type = SocketTypeTcp) {
         socket_type_ = socket_type;
+    }
+
+    active_socket & connect(const std::string & node, const std::string & service) {
+        return connect(node.empty() ? nullptr : node.c_str(), service.empty() ? nullptr : service.c_str());
     }
 
     active_socket & connect(const char * node, const char * service) {
@@ -948,29 +1203,46 @@ public:
         memset(&hints, 0, sizeof(addrinfo));
         hints.ai_family     = AF_UNSPEC;    // Allow IPv4 or IPv6
         //hints.ai_socktype   = SOCK_DGRAM;   // Datagram socket
-        hints.ai_socktype   = 0;            // Any socket
+        hints.ai_socktype   = socket_type_;
         hints.ai_flags      = AI_ALL;
         hints.ai_protocol   = 0;            // Any protocol
         hints.ai_canonname  = nullptr;
         hints.ai_addr       = nullptr;
         hints.ai_next       = nullptr;
 
-        if( getaddrinfo(node, service, &hints, &result) != 0 ) {
-            socket_errno_ = SocketEunknown;
-            throw std::runtime_error(str_error());
-            //throw std::runtime_error(gai_strerror(s));
+        auto r = getaddrinfo(node, service, &hints, &result);
+
+        if( r != 0 ) {
+            socket_errno_ = SocketEUnknown;
+            throw_socket_error(
+                std::string(str_error()) + ", " +
+#if _WIN32
+#   if QT_CORE_LIB
+                QString::fromWCharArray(gai_strerrorW(r)).toStdString()
+#   else
+                gai_strerrorA(r)
+#   endif
+#else
+                gai_strerror(r)
+#endif
+            );
+            return *this;
         }
 
         if( result == nullptr ) {
-            socket_errno_ = SocketEunknown;
-            throw std::runtime_error(str_error());
-            //throw std::runtime_error("No address succeeded");
+            socket_errno_ = SocketEUnknown;
+            throw_socket_error();
+            return *this;
         }
+
+        auto exceptions_safe = exceptions_;
 
         at_scope_exit(
             freeaddrinfo(result);
-            close();
+            exceptions_ = exceptions_safe;
         );
+
+        exceptions_ = false;
 
         // getaddrinfo() returns a list of address structures.
         // Try each address until we successfully connect(2).
@@ -980,42 +1252,61 @@ public:
         for( rp = result; rp != nullptr; rp = rp->ai_next ) {
             if( rp->ai_family != AF_INET
                 && rp->ai_family != AF_INET6
-                && rp->ai_socktype != SOCK_DGRAM
-                && rp->ai_socktype != SOCK_STREAM
-                && rp->ai_socktype != SOCK_RAW )
+                && rp->ai_socktype != socket_type_ )
                 continue;
 
             open(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-            memcpy(&remote_addr_, rp->ai_addr, rp->ai_addrlen);
 
-            if( ::connect(socket_, (sockaddr *) &remote_addr_, remote_addr_.addr_size()) != SocketError )
-                break;
+            if( valid() ) {
+                memcpy(&remote_addr_, rp->ai_addr, rp->ai_addrlen);
 
-            throw_socket_error();
+                if( ::connect(socket_, (sockaddr *) &remote_addr_, sizeof(remote_addr_)) != SocketError )
+                    break;
+            }
+
+            if( rp->ai_next == nullptr ) {
+                throw_translate_socket_error();
+                return *this;
+            }
         }
 
         if( rp == nullptr ) {
-            socket_errno_ = SocketNotconnected;
-            throw std::runtime_error(str_error());
+            socket_errno_ = SocketNotConnected;
+            throw_socket_error();
+            return *this;
         }
 
-        socklen_t as = remote_addr_.addr_size();
-        getsockname(socket_, (sockaddr *) &remote_addr_, &as);
-        getpeername(socket_, (sockaddr *) &local_addr_, &as);
+        socklen_t as = sizeof(local_addr_);
+        getpeername(socket_, (sockaddr *) &remote_addr_, &as);
+        getsockname(socket_, (sockaddr *) &local_addr_, &as);
 
         socket_errno_ = SocketSuccess;
 
         return *this;
     }
 
+    static std::shared_ptr<active_socket> shared() {
+        std::unique_ptr<active_socket> uniq(new active_socket);
+        return std::move(uniq);
+    }
+protected:
+private:
+    active_socket(const active_socket & socket);
+    void operator = (const active_socket &);
 };
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 class passive_socket : public base_socket {
 public:
-    ~passive_socket() {
-        close();
+    // move constructor
+    passive_socket(passive_socket && o) noexcept {
+        *this = std::move(o);
+    }
+
+    // Move assignment operator
+    passive_socket & operator = (passive_socket && o) noexcept {
+        return move(*this, o);
     }
 
     passive_socket(SocketType socket_type = SocketTypeTcp) {
@@ -1027,10 +1318,10 @@ public:
 #if _WIN32
         ULONG          inAddr;
 #else
-        int32_t        nReuse;
         in_addr_t      inAddr;
+        int32_t        tos = IPTOS_LOWDELAY;
 
-        nReuse = IPTOS_LOWDELAY;
+        setsockopt(socket_, IPPROTO_IP, IP_TOS, (const char *) &tos, sizeof(tos));
 #endif
 
         //--------------------------------------------------------------------------
@@ -1046,7 +1337,7 @@ public:
         // If no IP Address (interface ethn) is supplied, or the loop back is
         // specified then bind to any interface, else bind to specified interface.
         //--------------------------------------------------------------------------
-        if( pInterface == nullptr || strlen(pInterface) == 0 ) {
+        if( pInterface == nullptr || slen(pInterface) == 0 ) {
             multicast_group_.sin_addr.s_addr = htonl(INADDR_ANY);
         }
         else if( (inAddr = ::inet_addr(pInterface)) != INADDR_NONE ) {
@@ -1082,35 +1373,194 @@ public:
         return bRetVal;
     }
 
-    passive_socket & listen(const char * node, const char * service, uintptr_t backlog) {
+    passive_socket & listen(const std::string & node, const std::string & service, int backlog = 0) {
+        return listen(node.empty() ? nullptr : node.c_str(), service.empty() ? nullptr : service.c_str(), backlog);
+    }
+
+    template <typename T,
+        typename = std::enable_if_t<
+            std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
+            std::is_base_of<T::value_type, std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>>::value
+        >
+    >
+    static T wildcards() {
+        T container;
+#if _WIN32
+        base_socket dummy;
+#endif
         addrinfo hints, * result, * rp;
 
-        memset(&hints, 0, sizeof(addrinfo));
+        memset(&hints, 0, sizeof(hints));
         hints.ai_family     = AF_UNSPEC;    // Allow IPv4 or IPv6
-        //hints.ai_socktype   = SOCK_DGRAM;   // Datagram socket
-        hints.ai_socktype   = 0;            // Any socket
+        hints.ai_socktype   = 0;
         hints.ai_flags      = AI_PASSIVE;   // For wildcard IP address
         hints.ai_protocol   = 0;            // Any protocol
         hints.ai_canonname  = nullptr;
         hints.ai_addr       = nullptr;
         hints.ai_next       = nullptr;
 
-        if( getaddrinfo(node, service, &hints, &result) != 0 ) {
-            socket_errno_ = SocketEunknown;
-            throw std::runtime_error(str_error());
-            //throw std::runtime_error(gai_strerror(s));
+        auto r = getaddrinfo(nullptr, "0", &hints, &result);
+
+        if( r != 0 ) {
+            auto gai_err =
+#if _WIN32
+#   if QT_CORE_LIB
+            QString::fromWCharArray(gai_strerrorW(r)).toStdString()
+#   else
+            gai_strerrorA(r)
+#   endif
+#else
+            gai_strerror(r)
+#endif
+            ;
+            gai_err = gai_err;
+        }
+        else {
+            at_scope_exit(
+                freeaddrinfo(result);
+            );
+
+            for( rp = result; rp != nullptr; rp = rp->ai_next ) {
+                char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+
+                auto r = getnameinfo(rp->ai_addr, socklen_t(rp->ai_addrlen),
+                    hbuf, socklen_t(sizeof(hbuf)),
+                    sbuf, socklen_t(sizeof(sbuf)),
+                    NI_NUMERICHOST | NI_NUMERICSERV);
+
+                if( r == 0 )
+                    container.push_back(hbuf);
+            }
         }
 
-        if( result == nullptr ) {
-            socket_errno_ = SocketEunknown;
-            throw std::runtime_error(str_error());
-            //throw std::runtime_error("No address succeeded");
+        return container;
+    }
+
+    static auto wildcards() {
+        return wildcards<std::vector<std::string>>();
+    }
+
+    template <typename T,
+        typename = std::enable_if_t<
+            std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
+            std::is_base_of<T::value_type, std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>>::value
+        >
+    >
+    static T interfaces() {
+        T container;
+#if _WIN32
+        base_socket dummy;
+#endif
+        char node[8192], domain[4096];
+
+#if _WIN32
+        auto getdomainname = [] (char * name, size_t len) -> int {
+            DWORD dwSize = DWORD(len);
+
+            if( GetComputerNameExA(ComputerNamePhysicalDnsDomain, name, &dwSize) == FALSE ) {
+                if( GetLastError() == ERROR_MORE_DATA ) {
+                    errno = EINVAL;
+                    return -1;
+                }
+                else {
+                    errno = EFAULT;
+                    return -1; //_com_issue_error(HRESULT_FROM_WIN32(GetLastError()));
+                }
+                //buf = (char *) alloca(dwSize + 1);
+                //if( GetComputerNameExA((COMPUTER_NAME_FORMAT)ComputerNameDnsDomain, buf, &dwSize) == 0 ) {
+                    //hr =   HRESULT_FROM_WIN32(GetLastError());
+                    //errno = EFAULT;
+                    //return -1;
+                //}
+            }
+            else if( GetLastError() != NO_ERROR ){
+                errno = EFAULT;
+                return -1; //_com_issue_error(HRESULT_FROM_WIN32(GetLastError()));
+            }
+
+            return 0;
+        };
+#endif
+
+        if( gethostname(node, sizeof(domain)) == 0
+            && getdomainname(domain, sizeof(domain)) == 0 ) {
+
+            if( slen(domain) != 0 )
+                scat(scat(node, "."), domain);
+
+            addrinfo hints, * result, * rp;
+
+            memset(&hints, 0, sizeof(addrinfo));
+            hints.ai_family     = AF_UNSPEC;    // Allow IPv4 or IPv6
+            hints.ai_socktype   = 0;
+            hints.ai_flags      = AI_ALL;
+            hints.ai_protocol   = 0;            // Any protocol
+            hints.ai_canonname  = nullptr;
+            hints.ai_addr       = nullptr;
+            hints.ai_next       = nullptr;
+
+            auto r = getaddrinfo(node, "0", &hints, &result);
+
+            if( r == 0 ) {
+                at_scope_exit( freeaddrinfo(result) );
+
+                for( rp = result; rp != nullptr; rp = rp->ai_next ) {
+                    char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+
+                    if( getnameinfo(rp->ai_addr, socklen_t(rp->ai_addrlen),
+                            hbuf, socklen_t(sizeof(hbuf)),
+                            sbuf, socklen_t(sizeof(sbuf)),
+                            NI_NUMERICHOST | NI_NUMERICSERV) == 0 )
+                        container.push_back(hbuf);
+                }
+            }
         }
+
+        return container;
+    }
+
+    static auto interfaces() {
+        return interfaces<std::vector<std::string>>();
+    }
+
+    passive_socket & listen(const char * node, const char * service, int backlog = 0) {
+        addrinfo hints, * result, * rp;
+
+        memset(&hints, 0, sizeof(addrinfo));
+        hints.ai_family     = AF_UNSPEC;    // Allow IPv4 or IPv6
+        //hints.ai_socktype   = SOCK_DGRAM;   // Datagram socket
+        hints.ai_socktype   = socket_type_;
+        hints.ai_flags      = AI_PASSIVE;   // For wildcard IP address
+        hints.ai_protocol   = 0;            // Any protocol
+        hints.ai_canonname  = nullptr;
+        hints.ai_addr       = nullptr;
+        hints.ai_next       = nullptr;
+
+        auto r = ::getaddrinfo(node, service, &hints, &result);
+
+        if( r != 0 ) {
+            socket_errno_ = SocketEUnknown;
+            throw_socket_error(std::string(str_error()) + ", " +
+#if _WIN32
+#   if QT_CORE_LIB
+                QString::fromWCharArray(gai_strerrorW(r)).toStdString()
+#   else
+                ::gai_strerrorA(r)
+#   endif
+#else
+                ::gai_strerror(r)
+#endif
+            );
+        }
+
+        auto exceptions_safe = exceptions_;
 
         at_scope_exit(
-            freeaddrinfo(result);
-            close();
+            ::freeaddrinfo(result);
+            exceptions_ = exceptions_safe;
         );
+
+        exceptions_ = false;
 
         // getaddrinfo() returns a list of address structures.
         // Try each address until we successfully connect(2).
@@ -1120,39 +1570,50 @@ public:
         for( rp = result; rp != nullptr; rp = rp->ai_next ) {
             if( rp->ai_family != AF_INET
                 && rp->ai_family != AF_INET6
-                && rp->ai_socktype != SOCK_DGRAM
-                && rp->ai_socktype != SOCK_STREAM
-                && rp->ai_socktype != SOCK_RAW )
+                && rp->ai_socktype != socket_type_ )
                 continue;
 
-#ifndef _WIN32
-            //--------------------------------------------------------------------------
-            // Set the following socket option SO_REUSEADDR.  This will allow the file
-            // descriptor to be reused immediately after the socket is closed instead
-            // of setting in a TIMED_WAIT state.
-            //--------------------------------------------------------------------------
-            int32_t reuse = 1;
-            setsockopt(socket_, SOL_SOCKET, SO_REUSEADDR, (const char *) &reuse, sizeof(reuse));
-            setsockopt(socket_, SOL_SOCKET, SO_REUSEPORT, (const char *) &reuse, sizeof(reuse));
-            int32_t low = IPTOS_LOWDELAY;
-            setsockopt(socket_, IPPROTO_TCP, IP_TOS, (const char *) &low, sizeof(low));
-#endif
             open(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-            memcpy(&local_addr_, rp->ai_addr, rp->ai_addrlen);
 
-            if( ::bind(socket_, (sockaddr *) &local_addr_, local_addr_.addr_size()) != SocketError )
-                break;
+            if( valid() ) {
+#ifndef _WIN32
+                //--------------------------------------------------------------------------
+                // Set the following socket option SO_REUSEADDR.  This will allow the file
+                // descriptor to be reused immediately after the socket is closed instead
+                // of setting in a TIMED_WAIT state.
+                //--------------------------------------------------------------------------
+                int32_t reuse = 1;
+                setsockopt(socket_, SOL_SOCKET, SO_REUSEADDR, (const char *) &reuse, sizeof(reuse));
+#ifdef SO_REUSEPORT
+                setsockopt(socket_, SOL_SOCKET, SO_REUSEPORT, (const char *) &reuse, sizeof(reuse));
+#endif
+                int32_t low = IPTOS_LOWDELAY;
+                setsockopt(socket_, IPPROTO_TCP, IP_TOS, (const char *) &low, sizeof(low));
+#endif
 
+                memcpy(&local_addr_, rp->ai_addr, rp->ai_addrlen);
+
+                if( ::bind(socket_, (sockaddr *) &local_addr_, sizeof(local_addr_)) != SocketError )
+                    break;
+            }
+
+            if( rp->ai_next == nullptr ) {
+                throw_translate_socket_error();
+                return *this;
+            }
         }
 
         if( rp == nullptr ) {
-            socket_errno_ = SocketNotconnected;
-            throw std::runtime_error(str_error());
+            socket_errno_ = SocketNotConnected;
+            throw_socket_error();
+            return *this;
         }
 
         if( socket_type_ == SocketTypeTcp )
-            if( ::listen(socket_, int(backlog)) == SocketError )
-                throw_socket_error();
+            if( ::listen(socket_, int(backlog)) == SocketError ) {
+                throw_translate_socket_error();
+                return *this;
+            }
 
         socket_errno_ = SocketSuccess;
 
@@ -1162,36 +1623,340 @@ public:
     active_socket * accept() {
         if( socket_type_ != SocketTypeTcp ) {
             socket_errno_ = SocketProtocolError;
-            throw std::runtime_error(str_error());
+            throw_socket_error();
+            return nullptr;
         }
 
-        std::unique_ptr<active_socket> client_socket(new active_socket);
-        socklen_t    as = local_addr_.addr_size();
+        auto exceptions_safe = exceptions_;
+        at_scope_exit( exceptions_ = exceptions_safe );
+        exceptions_ = false;
 
-        for(;;) {
-            SOCKET socket = ::accept(socket_, (sockaddr *) &local_addr_, &as);
+        std::unique_ptr<active_socket> client_socket(new active_socket);
+        socklen_t as = sizeof(remote_addr_);
+
+        while( !interrupt_ ) {
+            select();
+
+            SOCKET socket = ::accept(socket_, (sockaddr *) &remote_addr_, &as);
 
             if( socket != INVALID_SOCKET ) {
-                client_socket->socket_ = socket;
-                client_socket->socket_errno_ = SocketSuccess;
-                client_socket->socket_domain_ = socket_domain_;
-                client_socket->socket_type_ = socket_type_;
-                //-------------------------------------------------------------
-                // Store client and server IP and port information for this
-                // connection.
-                //-------------------------------------------------------------
-                getsockname(socket_, (sockaddr *) &client_socket->remote_addr_, &as);
-                getpeername(socket_, (sockaddr *) &client_socket->local_addr_, &as);
+                client_socket->socket_          = socket;
+                client_socket->socket_errno_    = SocketSuccess;
+                client_socket->socket_domain_   = socket_domain_;
+                client_socket->socket_type_     = socket_type_;
+
+                getpeername(socket, (sockaddr *) &client_socket->remote_addr_, &as);
+                getsockname(socket, (sockaddr *) &client_socket->local_addr_, &as);
                 break;
             }
 
-            if( translate_socket_error() != SocketInterrupted )
-                throw std::runtime_error(str_error());
+            if( translate_socket_error() != SocketInterrupted ) {
+                if( !interrupt_ && exceptions_safe )
+                    throw std::runtime_error(str_error());
+                return nullptr;
+            }
         }
 
         return client_socket.release();
     }
+
+    std::shared_ptr<active_socket> accept_shared() {
+        std::unique_ptr<active_socket> uniq(accept());
+        return std::move(uniq);
+    }
+protected:
+private:
+    passive_socket(const passive_socket & socket);
+    void operator = (const passive_socket &);
 };
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+template <class _Elem, class _Traits>
+class basic_socket_streambuf : public std::basic_streambuf<_Elem, _Traits> {
+public:
+#if __GNUG__
+    typedef typename std::basic_streambuf<_Elem, _Traits> __streambuf_type;
+    typedef typename __streambuf_type::traits_type traits_type;
+    typedef typename __streambuf_type::char_type   char_type;
+    typedef typename __streambuf_type::int_type    int_type;
+
+    using __streambuf_type::gptr;
+    using __streambuf_type::egptr;
+    using __streambuf_type::gbump;
+    using __streambuf_type::setg;
+    using __streambuf_type::eback;
+    using __streambuf_type::pbase;
+    using __streambuf_type::pptr;
+    using __streambuf_type::epptr;
+    using __streambuf_type::pbump;
+    using __streambuf_type::setp;
+#endif
+
+    virtual ~basic_socket_streambuf() {
+        overflow(traits_type::eof()); // flush write buffer
+    }
+
+    basic_socket_streambuf(base_socket & socket) : socket_(&socket) {
+        setg(gbuf_.data(), gbuf_.data() + gbuf_.size(), gbuf_.data() + gbuf_.size());
+        setp(pbuf_.data(), pbuf_.data() + pbuf_.size());
+    }
+protected:
+    virtual std::streamsize showmanyc() const {
+        // return the number of chars in the input sequence
+        if( gptr() != nullptr && gptr() < egptr() )
+            return egptr() - gptr();
+
+        return 0;
+    }
+
+    virtual std::streamsize xsgetn(char_type * s, std::streamsize n) {
+        int rval = showmanyc();
+
+        if( rval >= n ) {
+            memcpy(s, gptr(), n * sizeof(char_type));
+            gbump(n);
+            return n;
+        }
+
+        memcpy(s, gptr(), rval * sizeof(char_type));
+        gbump(rval);
+
+        if( underflow() != traits_type::eof() )
+            return rval + xsgetn(s + rval, n - rval);
+
+        return rval;
+    }
+
+    virtual int_type underflow() {
+        assert( gptr() != nullptr );
+        // input stream has been disabled
+        // return traits_type::eof();
+
+        if( gptr() >= egptr() ) {
+            auto exceptions_safe = socket_->exceptions();
+            at_scope_exit( socket_->exceptions(exceptions_safe) );
+            socket_->exceptions(false);
+
+            auto r = socket_->recv(eback(), 0, gbuf_.size() * sizeof(char_type));
+
+            if( r <= 0 )
+                return traits_type::eof();
+
+            // reset input buffer pointers
+            setg(gbuf_.data(), gbuf_.data(), gbuf_.data() + r);
+        }
+
+        return *gptr();
+    }
+
+    virtual int_type uflow() {
+        auto ret = underflow();
+
+        if( ret != traits_type::eof() )
+            gbump(1);
+
+        return ret;
+    }
+
+    virtual int_type pbackfail(int_type c = traits_type::eof()) {
+        c = c;
+        return traits_type::eof();
+    }
+
+    virtual std::streamsize xsputn(const char_type * s, std::streamsize n) {
+        std::streamsize x = 0;
+
+        while( n != 0 ) {
+            auto wval = epptr() - pptr();
+            auto mval = std::min(wval, decltype(wval) (n));
+
+            memcpy(pptr(), s, mval * sizeof(char_type));
+            pbump(mval);
+
+            n -= mval;
+            s += mval;
+            x += mval;
+
+            if( n == 0 || overflow() == traits_type::eof() )
+                break;
+        }
+
+        return x;
+    }
+
+    virtual int_type overflow(int_type c = traits_type::eof()) {
+        // if pbase () == 0, no write is allowed and thus return eof.
+        // if c == eof, we sync the output and return 0.
+        // if pptr () == epptr (), buffer is full and thus sync the output,
+        //                         insert c into buffer, and return c.
+        // In all cases, if error happens, throw exception.
+
+        if( pbase() == nullptr )
+            return traits_type::eof();
+
+        if( c == traits_type::eof() )
+            return sync();
+
+        if( pptr() == epptr() )
+            sync();
+
+        *pptr() = char_type(c);
+        pbump(1);
+
+        return c;
+    }
+
+    virtual int sync() {
+        // returns ​0​ on success, -1 otherwise.
+        auto wval = pptr() - pbase();
+
+        // we have some data to flush
+        if( wval != 0 ) {
+            auto exceptions_safe = socket_->exceptions();
+            at_scope_exit( socket_->exceptions(exceptions_safe) );
+            socket_->exceptions(false);
+
+            auto w = socket_->send((const void *) pbase(), wval * sizeof(char_type));
+
+            if( w != wval * sizeof(char_type) )
+                return -1;
+
+            // reset output buffer pointers
+            setp(pbuf_.data(), pbuf_.data() + pbuf_.size());
+        }
+
+        return 0;
+    }
+
+    base_socket * socket_;
+
+    std::array<char_type, RX_MAX_BYTES / sizeof(char_type)> gbuf_;
+    std::array<char_type, TX_MAX_BYTES / sizeof(char_type)> pbuf_;
+};
+//------------------------------------------------------------------------------
+typedef basic_socket_streambuf<char, std::char_traits<char>> socket_streambuf;
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+template <class _Elem, class _Traits>
+class basic_socket_istream : public std::basic_istream<_Elem, _Traits> {
+public:
+#if __GNUG__
+    typedef typename std::basic_istream<_Elem, _Traits> __istream_type;
+
+    using __istream_type::exceptions;
+    using __istream_type::unsetf;
+    using __istream_type::rdbuf;
+    using __istream_type::setstate;
+#endif
+
+    basic_socket_istream(basic_socket_streambuf<_Elem, _Traits> * sbuf) :
+        std::basic_istream<_Elem, _Traits>(sbuf, std::ios_base::binary) {
+        // http://en.cppreference.com/w/cpp/io/basic_ios/exceptions
+        exceptions(std::ios_base::eofbit | std::ios_base::failbit | std::ios_base::badbit);
+        unsetf(std::ios_base::skipws);
+        unsetf(std::ios_base::unitbuf);
+    }
+
+    template <typename _Alloc>
+    auto & operator >> (std::basic_string<_Elem, _Traits, _Alloc> & s) {
+        // extract a null-terminated string
+        for(;;) {
+            auto c = rdbuf()->sbumpc();
+
+            if( c == _Traits::eof() ) {
+                setstate(std::ios_base::eofbit);
+                break;
+            }
+
+            if( c == _Elem('\0') )
+                break;
+
+            s.push_back(_Elem(c));
+        }
+
+        return *this;
+    }
+
+    typedef std::basic_istream<_Elem, _Traits> & (* __func_manipul_type)(std::basic_istream<_Elem, _Traits> &);
+
+    basic_socket_istream<_Elem, _Traits> & operator << (__func_manipul_type f) {
+        (*f) (*this);
+        return *this;
+    }
+};
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+template <class _Elem, class _Traits>
+class basic_socket_ostream : public std::basic_ostream<_Elem, _Traits> {
+public:
+#if __GNUG__
+    typedef typename std::basic_ostream<_Elem, _Traits> __ostream_type;
+
+    using __ostream_type::exceptions;
+    using __ostream_type::unsetf;
+    using __ostream_type::rdbuf;
+    using __ostream_type::setstate;
+#endif
+
+    basic_socket_ostream(basic_socket_streambuf<_Elem, _Traits> * sbuf) :
+        std::basic_ostream<_Elem, _Traits>(sbuf, std::ios_base::binary) {
+        // http://en.cppreference.com/w/cpp/io/basic_ios/exceptions
+        exceptions(std::ios_base::failbit | std::ios_base::badbit);
+        unsetf(std::ios_base::skipws);
+        unsetf(std::ios_base::unitbuf);
+    }
+
+    template <typename _Alloc>
+    auto & operator << (const std::basic_string<_Elem, _Traits, _Alloc> & s) {
+        // send a null-terminated string
+        *static_cast<std::basic_ostream<_Elem, _Traits> *>(this) << (s) << std::ends;
+        return *this;
+    }
+
+    typedef std::basic_ostream<_Elem, _Traits> & (* __func_manipul_type)(std::basic_ostream<_Elem, _Traits> &);
+
+    basic_socket_ostream<_Elem, _Traits> & operator << (__func_manipul_type f) {
+        (*f) (*this);
+        return *this;
+    }
+};
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+template <class _Elem, class _Traits>
+class basic_socket_stream :
+    public basic_socket_istream<_Elem, _Traits>,
+    public basic_socket_ostream<_Elem, _Traits>
+{
+public:
+    basic_socket_stream(basic_socket_streambuf<_Elem, _Traits> * sbuf) :
+        basic_socket_istream<_Elem, _Traits>(sbuf),
+        basic_socket_ostream<_Elem, _Traits>(sbuf) {
+    }
+};
+//------------------------------------------------------------------------------
+typedef basic_socket_stream<char, std::char_traits<char>> socket_stream;
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+template <class _Elem, class _Traits>
+class basic_socket_stream_buffered :
+    public basic_socket_streambuf<_Elem, _Traits>,
+    public basic_socket_istream<_Elem, _Traits>,
+    public basic_socket_ostream<_Elem, _Traits>
+{
+public:
+    basic_socket_stream_buffered(base_socket & socket) :
+        basic_socket_streambuf<_Elem, _Traits>(socket),
+        basic_socket_istream<_Elem, _Traits>(this),
+        basic_socket_ostream<_Elem, _Traits>(this) {
+    }
+};
+//------------------------------------------------------------------------------
+typedef basic_socket_stream_buffered<char, std::char_traits<char>> socket_stream_buffered;
 //------------------------------------------------------------------------------
 namespace tests {
 //------------------------------------------------------------------------------

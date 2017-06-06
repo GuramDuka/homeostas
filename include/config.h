@@ -45,6 +45,9 @@
 //#define CPPX_U CPPX_WITH_SYSCHAR_PREFIX
 //------------------------------------------------------------------------------
 #if _WIN32
+#   if _MSC_VER
+#       define NOMINMAX
+#   endif
 #   include <winsock2.h>
 #   include <ws2tcpip.h>
 #   include <windows.h>

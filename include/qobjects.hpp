@@ -95,13 +95,13 @@ class HomeostasConfiguration : public QObject {
 
                 for( const auto & c : val ) {
                     h += c.unicode();
-                    h += (h << 9);
-                    h ^= (h >> 5);
+                    h += h << 9;
+                    h ^= h >> 5;
                 }
 
-                h += (h << 3);
-                h ^= (h >> 10);
-                h += (h << 14);
+                h += h << 3;
+                h ^= h >> 10;
+                h += h << 14;
 
                 return h;
            }
@@ -113,15 +113,17 @@ class HomeostasConfiguration : public QObject {
            }
         };
 
-        struct VarNode {
+        struct var_node {
             uint64_t id;
             QString name;
             QVariant value;
-            std::unique_ptr<std::unordered_map<QString, VarNode, QStringHash, QStringEqual>> childs;
 
-            VarNode() {}
+            typedef std::unordered_map<QString, var_node, QStringHash, QStringEqual> childs_type;
+            std::unique_ptr<childs_type> childs;
 
-            VarNode(uint64_t v_id, const QString & v_name, const QVariant & v_value) :
+            var_node() {}
+
+            var_node(uint64_t v_id, const QString & v_name, const QVariant & v_value) :
                 id(v_id),
                 name(v_name),
                 value(v_value) {}
@@ -143,7 +145,7 @@ class HomeostasConfiguration : public QObject {
             }
 
             auto empty() const {
-                return childs->empty();
+                return childs == nullptr || childs->empty();
             }
 
             auto begin() {
@@ -155,13 +157,13 @@ class HomeostasConfiguration : public QObject {
             }
         };
 
-        VarNode getVarTree(const char * varName);
+        var_node getVarTree(const char * varName);
 
-        VarNode getVarTree(const std::string & varName) {
+        var_node getVarTree(const std::string & varName) {
             return getVarTree(varName.c_str());
         }
 
-        VarNode getVarTree(const QString & varName) {
+        var_node getVarTree(const QString & varName) {
             return getVarTree(varName.toStdString().c_str());
         }
 
@@ -177,7 +179,7 @@ class HomeostasConfiguration : public QObject {
     private:
         static HomeostasConfiguration * singleton_;
 
-        uint64_t lfsr_counter_;
+        uint64_t row_next_id_;
         std::unique_ptr<sqlite3pp::database> db_;
         std::unique_ptr<sqlite3pp::query> st_sel_;
         std::unique_ptr<sqlite3pp::query> st_sel_by_pid_;
