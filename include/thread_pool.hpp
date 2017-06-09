@@ -100,9 +100,7 @@ class thread_pool {
         {
             using return_type = typename std::result_of<F(Args...)>::type;
             auto task = std::make_shared<std::packaged_task<return_type()> >(
-                std::bind(std::forward<F>(f), std::forward<Args>(args)...)
-            );
-
+                std::bind(std::forward<F>(f), std::forward<Args>(args)...));
             std::future<return_type> res = task->get_future();
             std::unique_lock<std::mutex> lock(queue_mutex_);
 
@@ -177,12 +175,10 @@ class thread_pool {
                     return !tasks_.empty() || min_threads_ == 0;
                 };
 
-                auto now = std::chrono::system_clock::now();
-                auto deadline = now + std::chrono::nanoseconds(idle_timeout_);
 #ifndef NDEBUG
                 auto ws =
 #endif
-                queue_cond_.wait_until(lock, deadline, ql);
+                queue_cond_.wait_for(lock, std::chrono::nanoseconds(idle_timeout_), ql);
 
                 idle_threads_--;
 

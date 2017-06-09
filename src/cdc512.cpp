@@ -210,8 +210,7 @@ void cdc512::from_short_string(const std::string & s, const char * abc)
 //---------------------------------------------------------------------------
 void cdc512::generate_fast_entropy()
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
+    auto ts = clock_gettime_ns();
 
     init();
     update(&ts, sizeof(ts));
@@ -225,9 +224,7 @@ void cdc512::generate_entropy(std::vector<uint8_t> * p_entropy)
     typedef homeostas::rand<8, uint64_t> rand;
     rand r;
 
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    auto clock_ns = 1000000000ull * ts.tv_sec + ts.tv_nsec;
+    auto clock_ns = clock_gettime_ns();
 
     while( clock_ns && entropy.size() < rand::srand_size ) {
         uint8_t q = uint8_t(clock_ns & 0xff);
@@ -276,7 +273,7 @@ std::string cdc512::generate_prime()
     rand<8, uint64_t> r;
 
     struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
+    ::clock_gettime(CLOCK_REALTIME, &ts);
 
     r.srand(ts.tv_sec ^ uintptr_t(&s), ts.tv_nsec ^ uintptr_t(&s), ts.tv_sec ^ ts.tv_nsec);
     r.warming();

@@ -35,7 +35,7 @@
 int main(int argc,char ** argv)
 {
     //qSetMessagePattern("[%{type}] %{file}, %{line}: %{message}");
-    homeostas::tests::run_tests();
+    //homeostas::tests::run_tests();
 
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QGuiApplication app(argc, argv);

@@ -75,11 +75,7 @@ void directory_tracker::worker()
 
         std::unique_lock<std::mutex> lk(mtx_);
 
-        auto now = std::chrono::system_clock::now();
-        using namespace std::chrono_literals;
-        auto deadline = now + 10s + 10ms;
-
-        if( cv_.wait_until(lk, deadline, [&] { return shutdown_ || oneshot_; }) )
+        if( cv_.wait_for(lk, std::chrono::seconds(10), [&] { return shutdown_ || oneshot_; }) )
             break;
     }
 

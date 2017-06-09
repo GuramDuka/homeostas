@@ -31,6 +31,7 @@
 //------------------------------------------------------------------------------
 #include <algorithm>
 #include <sstream>
+#include <iomanip>
 #include <QtDebug>
 #include <QString>
 //------------------------------------------------------------------------------
@@ -133,15 +134,16 @@ void copy_eof(std::ostream & out, std::istream & in) {
 #if __GNUC__ > 0 && __GNUC__ < 5
 //------------------------------------------------------------------------------
 template <typename T> inline string to_string(const T & v) {
-    stringstream s;
+    ostringstream s;
     s << v;
     return s.str();
 }
 //------------------------------------------------------------------------------
 #endif
 //------------------------------------------------------------------------------
-inline size_t ihash(const char * val) {
-    register size_t h = 0;
+template <class H> inline
+H ihash(const char * val) {
+    H h = 0;
 
     while( *val != '\0' ) {
         h += *val++;
@@ -156,9 +158,27 @@ inline size_t ihash(const char * val) {
     return h;
 }
 //------------------------------------------------------------------------------
+template <typename H, typename T> inline
+H ihash(const T & v) {
+    H h = 0;
+    const uint8_t * val = reinterpret_cast<const uint8_t *>(&v);
+
+    for( auto i = sizeof(v); i > 0; i-- ) {
+        h += *val++;
+        h += h << (sizeof(h) * CHAR_BIT / 4 + 1); // when H 32 bit wide then 9
+        h ^= h >> (sizeof(h) * CHAR_BIT / 5 - 1); // when H 32 bit wide then 5
+    }
+
+    h += h << (sizeof(h) * CHAR_BIT / 10);        // when H 32 bit wide then 3
+    h ^= h >> (sizeof(h) * CHAR_BIT / 3);         // when H 32 bit wide then 10
+    h += h << (sizeof(h) * CHAR_BIT / 3 - 2);     // when H 32 bit wide then 14
+
+    return h;
+}
+//------------------------------------------------------------------------------
 template <typename H, typename InputIt> inline
 H ihash(InputIt first, InputIt last) {
-    register H h = 0;
+    H h = 0;
 
     while( first != last ) {
         h += *first++;
@@ -198,6 +218,37 @@ inline uint16_t rhash(uint16_t x) {
     x ^= 0xf00b;
     x *= 0xc437;
     return x;
+}
+//------------------------------------------------------------------------------
+inline std::string to_string_ellapsed(uint64_t ns) {
+    auto a		= ns / 1000000000ull;
+    auto nsecs	= ns % 1000000000ull;
+    auto days	= a / (60 * 60 * 24);
+    auto hours	= a / (60 * 60) - days * 24;
+    auto mins	= a / 60 - days * 24 * 60 - hours * 60;
+    auto secs	= a - days * 24 * 60 * 60 - hours * 60 * 60 - mins * 60;
+    std::ostringstream s;
+
+    auto out = [&s] (uint64_t v, streamsize w = 2, char prefix = ':') {
+        s << prefix << right << setfill('0') << setw(w) << v;
+    };
+
+    if( days != 0 ) {
+        s << days; out(hours); out(mins); out(secs); out(nsecs, 9, '.');
+    }
+    else if( hours != 0 ) {
+        out(hours); out(mins); out(secs); out(nsecs, 9, '.');
+    }
+    else if( mins != 0 ) {
+        out(mins); out(secs); out(nsecs, 9, '.');
+    }
+    else if( secs != 0 ) {
+        out(secs); out(nsecs, 9, '.');
+    }
+    else
+        out(nsecs, 9, '.');
+
+    return s.str();
 }
 //------------------------------------------------------------------------------
 } // namespace std

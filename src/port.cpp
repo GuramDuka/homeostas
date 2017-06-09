@@ -24,22 +24,13 @@
 //------------------------------------------------------------------------------
 #include "config.h"
 //------------------------------------------------------------------------------
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#if __GNUC__ >= 5 || _MSC_VER
-#include <io.h>
-#include <share.h>
-#endif
-#if _WIN32
-#include <process.h>
-#else
-#include <dirent.h>
-#endif
 #include <atomic>
 #include <ctime>
-#include <cerrno>
 #include <cstring>
+#if __GNUG__ > 0 && __GNUG__ < 5 && __ANDROID__
+#   include <unistd.h>
+#   include <sys/utsname.h>
+#endif
 //------------------------------------------------------------------------------
 #if defined(_S_IFDIR) && !defined(S_IFDIR)
 #define S_IFDIR _S_IFDIR
@@ -55,6 +46,58 @@
 #endif
 //------------------------------------------------------------------------------
 #include "port.hpp"
+//------------------------------------------------------------------------------
+// global namespace
+//------------------------------------------------------------------------------
+#if _WIN32 || (__GNUG__ > 0 && __GNUG__ < 5 && __ANDROID__)
+//------------------------------------------------------------------------------
+extern "C" int getdomainname(char * name, size_t len)
+{
+#if _WIN32
+    DWORD dwSize = DWORD(len);
+
+    if( GetComputerNameExA(ComputerNamePhysicalDnsDomain, name, &dwSize) == FALSE ) {
+        if( GetLastError() == ERROR_MORE_DATA ) {
+            errno = EINVAL;
+            return -1;
+        }
+        else {
+            errno = EFAULT;
+            return -1; //_com_issue_error(HRESULT_FROM_WIN32(GetLastError()));
+        }
+        //buf = (char *) alloca(dwSize + 1);
+        //if( GetComputerNameExA((COMPUTER_NAME_FORMAT)ComputerNameDnsDomain, buf, &dwSize) == 0 ) {
+            //hr =   HRESULT_FROM_WIN32(GetLastError());
+            //errno = EFAULT;
+            //return -1;
+        //}
+    }
+    else if( GetLastError() != NO_ERROR ){
+        errno = EFAULT;
+        return -1; //_com_issue_error(HRESULT_FROM_WIN32(GetLastError()));
+    }
+#else
+    utsname uts;
+
+    if( uname(&uts) == -1 )
+        return -1;
+
+    // Note: getdomainname()'s behavior varies across implementations when len is
+    // too small.  bionic follows the historical libc policy of returning EINVAL,
+    // instead of glibc's policy of copying the first len bytes without a NULL
+    // terminator.
+    if( strlen(uts.domainname) >= len ) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    strncpy(name, uts.domainname, len);
+#endif
+
+    return 0;
+}
+//------------------------------------------------------------------------------
+#endif
 //------------------------------------------------------------------------------
 #if _WIN32 && _MSC_VER
 //------------------------------------------------------------------------------
@@ -97,7 +140,7 @@ int clock_gettime(int /*dummy*/, struct timespec * ct)
     return 0;
 }
 //------------------------------------------------------------------------------
-#endif
+#endif // global namespace
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
@@ -252,7 +295,7 @@ std::string temp_name(std::string dir, std::string pfx)
 
 	do {
 		struct timespec ts;
-		clock_gettime(CLOCK_REALTIME, &ts);
+        ::clock_gettime(CLOCK_REALTIME, &ts);
 
         int m = int(ts.tv_sec ^ uintptr_t(&s[0]) ^ uintptr_t(&s));
         int n = int(ts.tv_nsec ^ uintptr_t(&s[0]) ^ uintptr_t(&s));
@@ -335,6 +378,16 @@ std::string path2rel(const std::string & path, bool no_back_slash)
             file_path.push_back(path_delimiter[0]);
     }
 	return file_path;
+}
+//------------------------------------------------------------------------------
+uint64_t clock_gettime_ns()
+{
+    struct timespec ts;
+
+    if( ::clock_gettime(CLOCK_REALTIME, &ts) != 0 )
+        throw std::runtime_error("clock_gettime failed");
+
+    return 1000000000ull * ts.tv_sec + ts.tv_nsec;
 }
 //------------------------------------------------------------------------------
 } // namespace homeostas

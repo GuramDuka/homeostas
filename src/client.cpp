@@ -37,6 +37,9 @@ void client::worker()
 //------------------------------------------------------------------------------
 void client::startup()
 {
+    if( thread_ != nullptr )
+        return;
+
     shutdown_ = false;
     socket_ = new QTcpSocket;
     thread_.reset(new std::thread(&client::worker, this));

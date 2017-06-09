@@ -50,16 +50,41 @@
 #include <cstdio>
 #include <cstdarg>
 #include <cerrno>
-
-#if __linux
-#include <sys/uio.h>
-#include <linux/if_packet.h>
-#include <linux/if_ether.h>
-#include <linux/if.h>
-#endif
-
-#if __APPLE__
-#include <net/if.h>
+//------------------------------------------------------------------------------
+#if __CYGWIN__ || __MINGW32__
+#   include <stdarg.h>
+#   if __CYGWIN__
+#       include <w32api/windef.h>
+#   include <w32api/winbase.h>
+#   include <w32api/winreg.h>
+#   endif
+#   include <unknwn.h>
+#   include <winreg.h>
+#elif _WIN32
+#   include <windows.h>
+#   include <iphlpapi.h>
+#elif __linux__
+#   include <sys/uio.h>
+#   include <linux/if_packet.h>
+#   include <linux/if_ether.h>
+#   include <linux/if.h>
+#elif __APPLE__
+#   include <cstdlib>
+#   include <sys/sysctl.h>
+#   include <sys/socket.h>
+#   include <net/if.h>
+#   include <net/route.h>
+#elif BSD || __FreeBSD_kernel__ || (sun && __SVR4)
+#   include <cstring>
+#   include <unistd.h>
+#   include <sys/socket.h>
+#   include <net/if.h>
+#   include <net/route.h>
+#elif __HAIKU__
+#   include <cstdlib>
+#   include <unistd.h>
+#   include <net/if.h>
+#   include <sys/sockio.h>
 #endif
 //------------------------------------------------------------------------------
 #include <cassert>
@@ -79,6 +104,7 @@
 #include <algorithm>
 #include <locale>
 //------------------------------------------------------------------------------
+#include "port.hpp"
 #include "locale_traits.hpp"
 #include "std_ext.hpp"
 #include "scope_exit.hpp"
@@ -97,6 +123,9 @@ namespace homeostas {
     constexpr int SHUT_RDWR = 2;
     constexpr int AF_PACKET = 17;
 #else
+#   ifndef IPPROTO_IPV4
+#       define IPPROTO_IPV4 4
+#   endif
     typedef int            SOCKET;
     constexpr int SOCKET_ERROR = -1;
 #endif
@@ -150,16 +179,16 @@ struct socket_addr {
         return *this;
     }
 
-    const auto & port() const {
-        return storage.ss_family == AF_INET6 ? saddr6.sin6_port : saddr4.sin_port;
+    const auto port() const {
+        return ntohs(storage.ss_family == AF_INET6 ? saddr6.sin6_port : storage.ss_family == AF_INET ? saddr4.sin_port : 0);
     }
 
     template <typename T>
     socket_addr & port(const T & port) {
         if( storage.ss_family == AF_INET )
-            saddr4.sin_port = decltype(saddr4.sin_port) (port);
+            saddr4.sin_port = htons(decltype(saddr4.sin_port) (port));
         else if( storage.ss_family == AF_INET6 )
-            saddr6.sin6_port = decltype(saddr6.sin6_port) (port);
+            saddr6.sin6_port = htons(decltype(saddr6.sin6_port) (port));
         return *this;
     }
 
@@ -183,11 +212,504 @@ struct socket_addr {
             storage.ss_family == AF_INET6 ? sizeof(saddr6) : 0;
     }
 
-    std::string addr_str() const {
+    auto & from_string(const std::string & addr) {
+        const char * p_node = addr.c_str(), * p_service = "0";
+        std::string node, service;
+
+        auto p = addr.rfind(':');
+
+        if( p != std::string::npos ) {
+            node = addr.substr(0, p);
+            p_node = node.c_str();
+
+            service = addr.substr(p + 1);
+
+            if( !service.empty() )
+                p_service = service.c_str();
+        }
+
+        addrinfo hints, * result = nullptr;
+
+        memset(&hints, 0, sizeof(addrinfo));
+
+        hints.ai_family     = storage.ss_family;
+        hints.ai_socktype   = 0;
+        hints.ai_flags      = AI_ALL;   // For wildcard IP address
+        hints.ai_protocol   = 0;        // Any protocol
+        hints.ai_canonname  = nullptr;
+        hints.ai_addr       = nullptr;
+        hints.ai_next       = nullptr;
+
+        auto r = getaddrinfo(p_node, p_service, &hints, &result);
+
+        if( r != 0 )
+            throw std::runtime_error(
+#if _WIN32
+#   if QT_CORE_LIB
+                QString::fromWCharArray(gai_strerrorW(r)).toStdString()
+#   else
+                gai_strerrorA(r)
+#   endif
+#else
+                gai_strerror(r)
+#endif
+        );
+
+        if( result != nullptr )
+            memcpy(&storage, result->ai_addr, result->ai_addrlen);
+
+        return *this;
+    }
+
+    std::string to_string() const {
         char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
-        auto r = getnameinfo((const sockaddr *) this, sizeof(*this), hbuf, sizeof(hbuf), sbuf,
+        auto r = getnameinfo((const sockaddr *) &storage, sizeof(storage), hbuf, sizeof(hbuf), sbuf,
                 sizeof(sbuf), NI_NUMERICHOST | NI_NUMERICSERV);
-        return std::string(r != 0 ? "" : hbuf);
+
+        if( r != 0 )
+            throw std::runtime_error(
+#if _WIN32
+#   if QT_CORE_LIB
+                QString::fromWCharArray(gai_strerrorW(r)).toStdString()
+#   else
+                gai_strerrorA(r)
+#   endif
+#else
+                gai_strerror(r)
+#endif
+        );
+
+        if( port() != 0 && slen(sbuf) != 0 )
+            return std::string(hbuf) + ":" + std::string(sbuf);
+
+        return std::string(hbuf);
+    }
+
+    bool default_gateway(bool no_throw = false) {
+        if( storage.ss_family == AF_INET )
+            if( get_default_gateway(&saddr4.sin_addr) == 0 )
+                return true;
+
+        if( !no_throw )
+            throw std::runtime_error("Can't get default gateway");
+
+        return false;
+    }
+
+    // There is no portable method to get the default route gateway.
+    // So below are four (or five ?) differents functions implementing this.
+    // Parsing /proc/net/route is for linux.
+    // sysctl is the way to access such informations on BSD systems.
+    // Many systems should provide route information through raw PF_ROUTE
+    // sockets.
+    // In MS Windows, default gateway is found by looking into the registry
+    // or by using GetBestRoute().
+
+    static int get_default_gateway(in_addr * addr) {
+#if __linux__
+        // parse /proc/net/route which is as follow :
+
+        //Iface   Destination     Gateway         Flags   RefCnt  Use     Metric  Mask            MTU     Window  IRTT
+        //wlan0   0001A8C0        00000000        0001    0       0       0       00FFFFFF        0       0       0
+        //eth0    0000FEA9        00000000        0001    0       0       0       0000FFFF        0       0       0
+        //wlan0   00000000        0101A8C0        0003    0       0       0       00000000        0       0       0
+        //eth0    00000000        00000000        0001    0       0       1000    00000000        0       0       0
+        //
+        // One header line, and then one line by route by route table entry.
+
+        FILE * f = fopen("/proc/net/route", "r");;
+
+        if( f == nullptr )
+            return -1;
+
+        char buf[256];
+        int line = 0;
+
+        while( fgets(buf, sizeof(buf), f) != nullptr ) {
+            if( line > 0 ) { // skip the first line
+                char * p = buf;
+
+                // skip the interface name
+                while( *p && !isspace(*p) )
+                    p++;
+
+                while( *p && isspace(*p) )
+                    p++;
+
+                unsigned long d, g;
+
+                if( sscanf(p, "%lx%lx", &d, &g) == 2 ) {
+                    if( d == 0 && g != 0 ) { // default
+                        addr->s_addr = g;
+                        fclose(f);
+                        return 0;
+                    }
+                }
+            }
+            line++;
+        }
+        // default route not found
+        if( f != nullptr )
+            fclose(f);
+
+        return -1;
+#elif __APPLE__
+        auto ROUNDUP = [] (auto a) {
+            return ((a) > 0 ? (1 + (((a) - 1) | (sizeof(long) - 1))) : sizeof(long));
+        };
+
+#if 0
+        /* net.route.0.inet.dump.0.0 ? */
+        int mib[] = {CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_DUMP, 0, 0/*tableid*/};
+#endif
+        /* net.route.0.inet.flags.gateway */
+        int mib[] = {CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_GATEWAY};
+        size_t l;
+        char * buf, * p;
+        struct rt_msghdr * rt;
+        struct sockaddr * sa;
+        struct sockaddr * sa_tab[RTAX_MAX];
+        int i;
+        int r = FAILED;
+        if(sysctl(mib, sizeof(mib)/sizeof(int), 0, &l, 0, 0) < 0) {
+            return FAILED;
+        }
+        if(l>0) {
+            buf = malloc(l);
+            if(sysctl(mib, sizeof(mib)/sizeof(int), buf, &l, 0, 0) < 0) {
+                free(buf);
+                return FAILED;
+            }
+            for(p=buf; p<buf+l; p+=rt->rtm_msglen) {
+                rt = (struct rt_msghdr *)p;
+                sa = (struct sockaddr *)(rt + 1);
+                for(i=0; i<RTAX_MAX; i++) {
+                    if(rt->rtm_addrs & (1 << i)) {
+                        sa_tab[i] = sa;
+                        sa = (struct sockaddr *)((char *)sa + ROUNDUP(sa->sa_len));
+                    } else {
+                        sa_tab[i] = NULL;
+                    }
+                }
+                if( ((rt->rtm_addrs & (RTA_DST|RTA_GATEWAY)) == (RTA_DST|RTA_GATEWAY))
+                  && sa_tab[RTAX_DST]->sa_family == AF_INET
+                  && sa_tab[RTAX_GATEWAY]->sa_family == AF_INET) {
+                    if(((struct sockaddr_in *)sa_tab[RTAX_DST])->sin_addr.s_addr == 0) {
+                        *addr = ((struct sockaddr_in *)(sa_tab[RTAX_GATEWAY]))->sin_addr.s_addr;
+                        r = SUCCESS;
+                    }
+                }
+            }
+            free(buf);
+        }
+
+        return r;
+#elif BSD || __FreeBSD_kernel__ || (sun && __SVR4)
+          // Thanks to Darren Kenny for this code
+        auto NEXTADDR = (auto w, auto u) {
+            if (rtm_addrs & w)
+            l = sizeof(struct sockaddr); memmove(cp, &(u), l); cp += l;
+        };
+
+        struct {
+            struct rt_msghdr m_rtm;
+            char       m_space[512];
+        } m_rtmsg;
+
+        int s, seq, l, rtm_addrs, i;
+        pid_t pid;
+        struct sockaddr so_dst, so_mask;
+        char *cp = m_rtmsg.m_space;
+        struct sockaddr *gate = NULL, *sa;
+        struct rt_msghdr *msg_hdr;
+
+        pid = getpid();
+        seq = 0;
+        rtm_addrs = RTA_DST | RTA_NETMASK;
+
+        memset(&so_dst, 0, sizeof(so_dst));
+        memset(&so_mask, 0, sizeof(so_mask));
+        memset(&m_rtmsg.m_rtm, 0, sizeof(struct rt_msghdr));
+
+        m_rtmsg.m_rtm.rtm_type = RTM_GET;
+        m_rtmsg.m_rtm.rtm_flags = RTF_UP | RTF_GATEWAY;
+        m_rtmsg.m_rtm.rtm_version = RTM_VERSION;
+        m_rtmsg.m_rtm.rtm_seq = ++seq;
+        m_rtmsg.m_rtm.rtm_addrs = rtm_addrs;
+
+        so_dst.sa_family = AF_INET;
+        so_mask.sa_family = AF_INET;
+
+        NEXTADDR(RTA_DST, so_dst);
+        NEXTADDR(RTA_NETMASK, so_mask);
+
+        m_rtmsg.m_rtm.rtm_msglen = l = cp - (char *)&m_rtmsg;
+
+        s = socket(PF_ROUTE, SOCK_RAW, 0);
+
+        if (write(s, (char *)&m_rtmsg, l) < 0) {
+            close(s);
+            return FAILED;
+        }
+
+        do {
+            l = read(s, (char *)&m_rtmsg, sizeof(m_rtmsg));
+        } while (l > 0 && (rtm.rtm_seq != seq || rtm.rtm_pid != pid));
+
+        close(s);
+
+        msg_hdr = &rtm;
+
+        cp = ((char *)(msg_hdr + 1));
+
+        if (msg_hdr->rtm_addrs) {
+            for (i = 1; i; i <<= 1)
+                if (i & msg_hdr->rtm_addrs) {
+                    sa = (struct sockaddr *)cp;
+                    if (i == RTA_GATEWAY )
+                        gate = sa;
+
+                    cp += sizeof(struct sockaddr);
+                }
+                else
+                    return FAILED;
+        }
+
+        if( gate != NULL ) {
+            *addr = ((struct sockaddr_in *)gate)->sin_addr.s_addr;
+            return SUCCESS;
+        }
+        return FAILED;
+#elif _WIN32
+            constexpr size_t MAX_KEY_LENGTH = 255;
+            constexpr size_t MAX_VALUE_LENGTH = 16383;
+
+            HKEY networkCardsKey;
+            HKEY networkCardKey;
+            HKEY interfacesKey;
+            HKEY interfaceKey;
+            DWORD i = 0;
+            DWORD numSubKeys = 0;
+            CHAR keyName[MAX_KEY_LENGTH];
+            DWORD keyNameLength = MAX_KEY_LENGTH;
+            CHAR keyValue[MAX_VALUE_LENGTH];
+            DWORD keyValueLength = MAX_VALUE_LENGTH;
+            DWORD keyValueType = REG_SZ;
+            CHAR gatewayValue[MAX_VALUE_LENGTH];
+            DWORD gatewayValueLength = MAX_VALUE_LENGTH;
+            DWORD gatewayValueType = REG_MULTI_SZ;
+            bool done = 0;
+
+            constexpr CONST CHAR networkCardsPath[] = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkCards";
+            constexpr CONST CHAR interfacesPath[] = "SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces";
+            constexpr CONST CHAR STR_SERVICENAME[] = "ServiceName";
+            constexpr CONST CHAR STR_DHCPDEFAULTGATEWAY[] = "DhcpDefaultGateway";
+            constexpr CONST CHAR STR_DEFAULTGATEWAY[] = "DefaultGateway";
+
+            // The windows registry lists its primary network devices in the following location:
+            // HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkCards
+            //
+            // Each network device has its own subfolder, named with an index, with various properties:
+            // -NetworkCards
+            //   -5
+            //     -Description = Broadcom 802.11n Network Adapter
+            //     -ServiceName = {E35A72F8-5065-4097-8DFE-C7790774EE4D}
+            //   -8
+            //     -Description = Marvell Yukon 88E8058 PCI-E Gigabit Ethernet Controller
+            //     -ServiceName = {86226414-5545-4335-A9D1-5BD7120119AD}
+            //
+            // The above service name is the name of a subfolder within:
+            // HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces
+            //
+            // There may be more subfolders in this interfaces path than listed in the network cards path above:
+            // -Interfaces
+            //   -{3a539854-6a70-11db-887c-806e6f6e6963}
+            //     -DhcpIPAddress = 0.0.0.0
+            //     -[more]
+            //   -{E35A72F8-5065-4097-8DFE-C7790774EE4D}
+            //     -DhcpIPAddress = 10.0.1.4
+            //     -DhcpDefaultGateway = 10.0.1.1
+            //     -[more]
+            //   -{86226414-5545-4335-A9D1-5BD7120119AD}
+            //     -DhcpIpAddress = 10.0.1.5
+            //     -DhcpDefaultGateay = 10.0.1.1
+            //     -[more]
+            //
+            // In order to extract this information, we enumerate each network card, and extract the ServiceName value.
+            // This is then used to open the interface subfolder, and attempt to extract a DhcpDefaultGateway value.
+            // Once one is found, we're done.
+            //
+            // It may be possible to simply enumerate the interface folders until we find one with a DhcpDefaultGateway value.
+            // However, the technique used is the technique most cited on the web, and we assume it to be more correct.
+
+            if( RegOpenKeyExA(HKEY_LOCAL_MACHINE,                // Open registry key or predifined key
+                                             networkCardsPath,   // Name of registry subkey to open
+                                             0,                  // Reserved - must be zero
+                                             KEY_READ,           // Mask - desired access rights
+                                             &networkCardsKey)   // Pointer to output key
+                    != ERROR_SUCCESS )
+            {
+                // Unable to open network cards keys
+                return -1;
+            }
+
+            if( RegOpenKeyExA(HKEY_LOCAL_MACHINE,                // Open registry key or predefined key
+                                             interfacesPath,     // Name of registry subkey to open
+                                             0,                  // Reserved - must be zero
+                                             KEY_READ,           // Mask - desired access rights
+                                             &interfacesKey)     // Pointer to output key
+                    != ERROR_SUCCESS )
+            {
+                // Unable to open interfaces key
+                RegCloseKey(networkCardsKey);
+                return -1;
+            }
+
+            // Figure out how many subfolders are within the NetworkCards folder
+            RegQueryInfoKeyA(networkCardsKey, NULL, NULL, NULL, &numSubKeys, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+
+            //printf( "Number of subkeys: %u\n", (unsigned int)numSubKeys);
+
+            // Enumrate through each subfolder within the NetworkCards folder
+            for( i = 0; i < numSubKeys && !done; i++ ) {
+                keyNameLength = MAX_KEY_LENGTH;
+
+                if( RegEnumKeyExA(networkCardsKey,                // Open registry key
+                                                 i,               // Index of subkey to retrieve
+                                                 keyName,         // Buffer that receives the name of the subkey
+                                                 &keyNameLength,  // Variable that receives the size of the above buffer
+                                                 NULL,            // Reserved - must be NULL
+                                                 NULL,            // Buffer that receives the class string
+                                                 NULL,            // Variable that receives the size of the above buffer
+                                                 NULL)            // Variable that receives the last write time of subkey
+                        == ERROR_SUCCESS )
+                {
+                    if( RegOpenKeyExA(networkCardsKey,  keyName, 0, KEY_READ, &networkCardKey) == ERROR_SUCCESS ) {
+                        keyValueLength = MAX_VALUE_LENGTH;
+
+                        if( RegQueryValueExA(networkCardKey,                  // Open registry key
+                                                            STR_SERVICENAME,  // Name of key to query
+                                                            NULL,             // Reserved - must be NULL
+                                                            &keyValueType,    // Receives value type
+                                                            (LPBYTE)keyValue, // Receives value
+                                                            &keyValueLength)  // Receives value length in bytes
+                                == ERROR_SUCCESS )
+                        {
+        //					printf("keyValue: %s\n", keyValue);
+                            if( RegOpenKeyExA(interfacesKey, keyValue, 0, KEY_READ, &interfaceKey) == ERROR_SUCCESS ) {
+                                gatewayValueLength = MAX_VALUE_LENGTH;
+
+                                if( RegQueryValueExA(interfaceKey,                          // Open registry key
+                                                                    STR_DHCPDEFAULTGATEWAY, // Name of key to query
+                                                                    NULL,                   // Reserved - must be NULL
+                                                                    &gatewayValueType,      // Receives value type
+                                                                    (LPBYTE)gatewayValue,   // Receives value
+                                                                    &gatewayValueLength)    // Receives value length in bytes
+                                        == ERROR_SUCCESS )
+                                {
+                                    // Check to make sure it's a string
+                                    if( (gatewayValueType == REG_MULTI_SZ || gatewayValueType == REG_SZ) && (gatewayValueLength > 1) ) {
+                                        //printf("gatewayValue: %s\n", gatewayValue);
+                                        done = true;
+                                    }
+                                }
+                                else if( RegQueryValueExA(interfaceKey,                     // Open registry key
+                                                                    STR_DEFAULTGATEWAY,     // Name of key to query
+                                                                    NULL,                   // Reserved - must be NULL
+                                                                    &gatewayValueType,      // Receives value type
+                                                                    (LPBYTE)gatewayValue,   // Receives value
+                                                                    &gatewayValueLength)    // Receives value length in bytes
+                                         == ERROR_SUCCESS )
+                                {
+                                    // Check to make sure it's a string
+                                    if( (gatewayValueType == REG_MULTI_SZ || gatewayValueType == REG_SZ) && (gatewayValueLength > 1) ) {
+                                        //printf("gatewayValue: %s\n", gatewayValue);
+                                        done = true;
+                                    }
+                                }
+                                RegCloseKey(interfaceKey);
+                            }
+                        }
+                        RegCloseKey(networkCardKey);
+                    }
+                }
+            }
+
+            RegCloseKey(interfacesKey);
+            RegCloseKey(networkCardsKey);
+
+            if( done ) {
+                addr->S_un.S_addr = inet_addr(gatewayValue);
+                return 0;
+            }
+
+#   if __CYGWIN__ || __MINGW32__
+            return -1;
+#   else
+            MIB_IPFORWARDROW ip_forward;
+            memset(&ip_forward, 0, sizeof(ip_forward));
+
+            if( GetBestRoute(inet_addr("0.0.0.0"), 0, &ip_forward) != NO_ERROR )
+                return -1;
+
+            addr->s_addr = ip_forward.dwForwardNextHop;
+
+            return 0;
+#   endif
+#elif __HAIKU__
+            int fd, ret = -1;
+            struct ifconf config;
+            void *buffer = NULL;
+            struct ifreq *interface;
+
+            if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+                return -1;
+            }
+            if (ioctl(fd, SIOCGRTSIZE, &config, sizeof(config)) != 0) {
+                goto fail;
+            }
+            if (config.ifc_value < 1) {
+                goto fail; /* No routes */
+            }
+            if ((buffer = malloc(config.ifc_value)) == NULL) {
+                goto fail;
+            }
+            config.ifc_len = config.ifc_value;
+            config.ifc_buf = buffer;
+            if (ioctl(fd, SIOCGRTTABLE, &config, sizeof(config)) != 0) {
+                goto fail;
+            }
+            for (interface = buffer;
+              (uint8_t *)interface < (uint8_t *)buffer + config.ifc_len; ) {
+                struct route_entry route = interface->ifr_route;
+                int intfSize;
+                if (route.flags & (RTF_GATEWAY | RTF_DEFAULT)) {
+                    *addr = ((struct sockaddr_in *)route.gateway)->sin_addr.s_addr;
+                    ret = 0;
+                    break;
+                }
+                intfSize = sizeof(route) + IF_NAMESIZE;
+                if (route.destination != NULL) {
+                    intfSize += route.destination->sa_len;
+                }
+                if (route.mask != NULL) {
+                    intfSize += route.mask->sa_len;
+                }
+                if (route.gateway != NULL) {
+                    intfSize += route.gateway->sa_len;
+                }
+                interface = (struct ifreq *)((uint8_t *)interface + intfSize);
+            }
+        fail:
+            free(buffer);
+            close(fd);
+            return ret;
+        }
+#else
+        errno = ENOSYS;
+
+        return -1;
+#endif
     }
 };
 //------------------------------------------------------------------------------
@@ -239,18 +761,29 @@ namespace homeostas {
 //------------------------------------------------------------------------------
 typedef enum {
     SocketDomainInvalid = -1,
-    SocketDomainUNSPEC = AF_UNSPEC,
-    SocketDomainPACKET = AF_PACKET,
-    SocketDomainINET = AF_INET,
-    SocketDomainINET6 = AF_INET6
+    SocketDomainUNSPEC  = AF_UNSPEC,
+    SocketDomainPACKET  = AF_PACKET,
+    SocketDomainINET    = AF_INET,
+    SocketDomainINET6   = AF_INET6
 } SocketDomain;
 //------------------------------------------------------------------------------
 typedef enum {
-    SocketTypeInvalid = -1,
-    SocketTypeTcp = SOCK_STREAM,
-    SocketTypeUdp = SOCK_DGRAM,
-    SocketTypeRaw = SOCK_RAW
+    SocketTypeInvalid   = -1,
+    SocketTypeTCP       = SOCK_STREAM,
+    SocketTypeUDP       = SOCK_DGRAM,
+    SocketTypeRAW       = SOCK_RAW
 } SocketType;
+//------------------------------------------------------------------------------
+typedef enum {
+    SocketProtoInvalid = -1,
+    SocketProtoIP      = IPPROTO_IP,
+    SocketProtoIPV4    = IPPROTO_IPV4,
+    SocketProtoIPV6    = IPPROTO_IPV6,
+    SocketProtoUDP     = IPPROTO_UDP,
+    SocketProtoICMP    = IPPROTO_ICMP,
+    SocketProtoICMPV6  = IPPROTO_ICMPV6,
+    SocketProtoRAW     = IPPROTO_RAW
+} SocketProtocol;
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
@@ -319,6 +852,7 @@ public:
         socket_errno_(SocketInvalid),
         socket_domain_(SocketDomainInvalid),
         socket_type_(SocketTypeInvalid),
+        socket_proto_(SocketProtoInvalid),
         socket_flags_(0),
         is_multicast_(false),
         exceptions_(true),
@@ -334,8 +868,8 @@ public:
                 memset(&wsa_data_, 0, sizeof(wsa_data_));
 
                 if( WSAStartup(MAKEWORD(2, 2), &wsa_data_) != 0 ) {
-                    wsa_count_--;
-                    throw_translate_socket_error();
+                    //wsa_count_--;
+                    //throw_translate_socket_error();
                 }
 
                 wsa_started_ = true;
@@ -344,7 +878,7 @@ public:
 #endif
     }
 
-    base_socket & open(int socket_domain, int socket_type, int socket_protocol = 0) {
+    base_socket & open(int socket_domain, int socket_type, int socket_protocol) {
         if( valid() )
             close();
 
@@ -357,11 +891,12 @@ public:
 
         socket_domain_  = decltype(socket_domain_) (socket_domain);
         socket_type_    = decltype(socket_type_) (socket_type);
+        socket_proto_   = decltype(socket_proto_) (socket_protocol);
 
         return *this;
     }
 
-    base_socket & open(SocketDomain socket_domain = SocketDomainINET, SocketType socket_type = SocketTypeTcp, int socket_protocol = 0) {
+    base_socket & open(SocketDomain socket_domain = SocketDomainINET, SocketType socket_type = SocketTypeTCP, SocketProtocol socket_protocol = SocketProtoIP) {
         return open(int(socket_domain), int(socket_type), int(socket_protocol));
     }
 
@@ -401,7 +936,8 @@ public:
         return *this;
     }
 
-    bool select(uint64_t timeout_ns = ~uint64_t(0)) {
+    bool select(uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
+        uint64_t started = p_ellapsed != nullptr ? clock_gettime_ns() : 0;
         struct timeval * p_timeout = nullptr;
         struct timeval   timeout;
 
@@ -428,10 +964,13 @@ public:
 
         int n = ::select(1, &read_fds, &write_fds, &error_fds, p_timeout);
 
+        if ( p_ellapsed != nullptr )
+            *p_ellapsed = clock_gettime_ns() - started;
+
         if( n == -1 ) {
             throw_translate_socket_error();
         }
-        if( n == 0 ) {
+        else if( n == 0 ) {
             socket_errno_ = SocketTimedout;
         }
         //----------------------------------------------------------------------
@@ -478,10 +1017,10 @@ public:
 
             for(;;) {
                 switch( socket_type_ ) {
-                    case SocketTypeTcp  :
+                    case SocketTypeTCP  :
                         r = ::recv(socket_, (char *) buffer, nb, socket_flags_);// MSG_WAITALL
                         break;
-                    case SocketTypeUdp  :
+                    case SocketTypeUDP  :
                         r = ::recvfrom(socket_, (char *) buffer, nb, socket_flags_,
                             (sockaddr *) (is_multicast_ ? &multicast_group_ : local_addr_.addr_data()), &as);
                         break;
@@ -516,9 +1055,13 @@ public:
     }
 
     template <typename T,
-        typename = std::enable_if_t<
-            std::is_base_of<T, std::array<typename T::value_type, typename T::_Size>>::value
-        >
+        typename = std::enable_if_t<std::is_base_of<T, std::array<typename T::value_type,
+#if __GNUG__
+            T::_Nm
+#elif _MSC_VER
+            typename T::_Size
+#endif
+            >>::value>
     >
     T recv(size_t size = 0) {
         T buffer;
@@ -533,18 +1076,19 @@ public:
         >
     >
     T recv(size_t size = ~size_t(0), size_t max_recv = RX_MAX_BYTES) {
+        typedef typename T::value_type VT;
         T buffer;
-        T::value_type * buf = (T::value_type *) alloca(max_recv);
-        size_t buf_size = max_recv - (max_recv % sizeof(T::value_type));
-        buf_size *= sizeof(T::value_type);
+        VT * buf = (VT *) alloca(max_recv);
+        size_t buf_size = max_recv - (max_recv % sizeof(VT));
+        buf_size *= sizeof(VT);
 
         for(;;) {
             auto r = recv(buf, 0, buf_size);
 
-            if( r == SocketError || r == 0 )
+            if( socket_errno_ != SocketSuccess || r == 0 )
                 break;
 
-            r -= r % sizeof(T::value_type);
+            r -= r % sizeof(VT);
 
             buffer.append(buf, r);
 
@@ -567,10 +1111,10 @@ public:
 
             for(;;) {
                 switch( socket_type_ ) {
-                    case SocketTypeTcp  :
+                    case SocketTypeTCP  :
                         w = ::send(socket_, (const char *) buf, nb, socket_flags_);
                         break;
-                    case SocketTypeUdp  :
+                    case SocketTypeUDP  :
                         w = ::sendto(socket_, (const char *) buf, nb, socket_flags_,
                             (const sockaddr *) (is_multicast_ ? &multicast_group_ : &remote_addr_.saddr4),
                             as);
@@ -658,7 +1202,7 @@ public:
     }
 
     base_socket & multicast(uint8_t multicast_ttl) {
-        if( socket_type_ == SocketTypeUdp ) {
+        if( socket_type_ == SocketTypeUDP ) {
             if( setsockopt(socket_, IPPROTO_IP, IP_MULTICAST_TTL, (const char *) &multicast_ttl, sizeof(multicast_ttl)) != 0 ) {
                 throw_translate_socket_error();
 			}
@@ -885,6 +1429,123 @@ public:
 
     auto interrupt() const {
         return interrupt_;
+    }
+
+    template <typename T,
+        typename = std::enable_if_t<
+            std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
+            std::is_base_of<typename T::value_type, std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>>::value
+        >
+    >
+    static T wildcards() {
+        T container;
+#if _WIN32
+        base_socket dummy;
+#endif
+        addrinfo hints, * result, * rp;
+
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family     = AF_UNSPEC;    // Allow IPv4 or IPv6
+        hints.ai_socktype   = 0;
+        hints.ai_flags      = AI_PASSIVE;   // For wildcard IP address
+        hints.ai_protocol   = 0;            // Any protocol
+        hints.ai_canonname  = nullptr;
+        hints.ai_addr       = nullptr;
+        hints.ai_next       = nullptr;
+
+        auto r = getaddrinfo(nullptr, "0", &hints, &result);
+
+        if( r != 0 ) {
+            auto gai_err =
+#if _WIN32
+#   if QT_CORE_LIB
+            QString::fromWCharArray(gai_strerrorW(r)).toStdString()
+#   else
+            gai_strerrorA(r)
+#   endif
+#else
+            gai_strerror(r)
+#endif
+            ;
+            gai_err = gai_err;
+        }
+        else {
+            at_scope_exit(
+                freeaddrinfo(result);
+            );
+
+            for( rp = result; rp != nullptr; rp = rp->ai_next ) {
+                char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+
+                auto r = getnameinfo(rp->ai_addr, socklen_t(rp->ai_addrlen),
+                    hbuf, socklen_t(sizeof(hbuf)),
+                    sbuf, socklen_t(sizeof(sbuf)),
+                    NI_NUMERICHOST | NI_NUMERICSERV);
+
+                if( r == 0 )
+                    container.push_back(hbuf);
+            }
+        }
+
+        return container;
+    }
+
+    static auto wildcards() {
+        return wildcards<std::vector<std::string>>();
+    }
+
+    template <typename T,
+        typename = std::enable_if_t<
+            std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
+            std::is_base_of<typename T::value_type, std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>>::value
+        >
+    >
+    static T interfaces() {
+        T container;
+#if _WIN32
+        base_socket dummy;
+#endif
+        char node[8192], domain[4096];
+
+        if( gethostname(node, sizeof(domain)) == 0
+            && getdomainname(domain, sizeof(domain)) == 0 ) {
+
+            if( slen(domain) != 0 )
+                scat(scat(node, "."), domain);
+
+            addrinfo hints, * result, * rp;
+
+            memset(&hints, 0, sizeof(addrinfo));
+            hints.ai_family     = AF_UNSPEC;    // Allow IPv4 or IPv6
+            hints.ai_socktype   = 0;
+            hints.ai_flags      = AI_ALL;
+            hints.ai_protocol   = 0;            // Any protocol
+            hints.ai_canonname  = nullptr;
+            hints.ai_addr       = nullptr;
+            hints.ai_next       = nullptr;
+
+            auto r = getaddrinfo(node, "0", &hints, &result);
+
+            if( r == 0 ) {
+                at_scope_exit( freeaddrinfo(result) );
+
+                for( rp = result; rp != nullptr; rp = rp->ai_next ) {
+                    char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+
+                    if( getnameinfo(rp->ai_addr, socklen_t(rp->ai_addrlen),
+                            hbuf, socklen_t(sizeof(hbuf)),
+                            sbuf, socklen_t(sizeof(sbuf)),
+                            NI_NUMERICHOST | NI_NUMERICSERV) == 0 )
+                        container.push_back(hbuf);
+                }
+            }
+        }
+
+        return container;
+    }
+
+    static auto interfaces() {
+        return interfaces<std::vector<std::string>>();
     }
 protected:
     uint32_t window_size(uint32_t nOptionName) {
@@ -1159,6 +1820,7 @@ protected:
     SocketErrors                socket_errno_;      // number of last error
     SocketDomain                socket_domain_;     // socket type AF_INET, AF_INET6
     SocketType                  socket_type_;       // socket type - UDP, TCP or RAW
+    SocketProtocol                 socket_proto_;
     int                         socket_flags_;      // socket flags
     bool                        is_multicast_;      // is the UDP socket multicast;
     bool                        exceptions_;
@@ -1167,7 +1829,7 @@ protected:
     socket_addr                 local_addr_;
     sockaddr_in                 multicast_group_;
 private:
-    base_socket(const base_socket & socket);
+    base_socket(const base_socket & base_socket);
     void operator = (const base_socket &);
 };
 //------------------------------------------------------------------------------
@@ -1189,12 +1851,20 @@ public:
         return move(*this, o);
     }
 
-    active_socket(SocketType socket_type = SocketTypeTcp) {
+    active_socket(SocketType socket_type = SocketTypeTCP) {
         socket_type_ = socket_type;
     }
 
     active_socket & connect(const std::string & node, const std::string & service) {
         return connect(node.empty() ? nullptr : node.c_str(), service.empty() ? nullptr : service.c_str());
+    }
+
+    active_socket & connect(const std::string & node, const char * service) {
+        return connect(node.empty() ? nullptr : node.c_str(), service);
+    }
+
+    active_socket & connect(const char * node, const std::string & service) {
+        return connect(node, service.empty() ? nullptr : service.c_str());
     }
 
     active_socket & connect(const char * node, const char * service) {
@@ -1280,6 +1950,7 @@ public:
         getpeername(socket_, (sockaddr *) &remote_addr_, &as);
         getsockname(socket_, (sockaddr *) &local_addr_, &as);
 
+        interrupt_ = false;
         socket_errno_ = SocketSuccess;
 
         return *this;
@@ -1291,7 +1962,7 @@ public:
     }
 protected:
 private:
-    active_socket(const active_socket & socket);
+    active_socket(const active_socket & base_socket);
     void operator = (const active_socket &);
 };
 //------------------------------------------------------------------------------
@@ -1309,7 +1980,7 @@ public:
         return move(*this, o);
     }
 
-    passive_socket(SocketType socket_type = SocketTypeTcp) {
+    passive_socket(SocketType socket_type = SocketTypeTCP) {
         socket_type_ = socket_type;
     }
 
@@ -1377,152 +2048,6 @@ public:
         return listen(node.empty() ? nullptr : node.c_str(), service.empty() ? nullptr : service.c_str(), backlog);
     }
 
-    template <typename T,
-        typename = std::enable_if_t<
-            std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
-            std::is_base_of<T::value_type, std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>>::value
-        >
-    >
-    static T wildcards() {
-        T container;
-#if _WIN32
-        base_socket dummy;
-#endif
-        addrinfo hints, * result, * rp;
-
-        memset(&hints, 0, sizeof(hints));
-        hints.ai_family     = AF_UNSPEC;    // Allow IPv4 or IPv6
-        hints.ai_socktype   = 0;
-        hints.ai_flags      = AI_PASSIVE;   // For wildcard IP address
-        hints.ai_protocol   = 0;            // Any protocol
-        hints.ai_canonname  = nullptr;
-        hints.ai_addr       = nullptr;
-        hints.ai_next       = nullptr;
-
-        auto r = getaddrinfo(nullptr, "0", &hints, &result);
-
-        if( r != 0 ) {
-            auto gai_err =
-#if _WIN32
-#   if QT_CORE_LIB
-            QString::fromWCharArray(gai_strerrorW(r)).toStdString()
-#   else
-            gai_strerrorA(r)
-#   endif
-#else
-            gai_strerror(r)
-#endif
-            ;
-            gai_err = gai_err;
-        }
-        else {
-            at_scope_exit(
-                freeaddrinfo(result);
-            );
-
-            for( rp = result; rp != nullptr; rp = rp->ai_next ) {
-                char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
-
-                auto r = getnameinfo(rp->ai_addr, socklen_t(rp->ai_addrlen),
-                    hbuf, socklen_t(sizeof(hbuf)),
-                    sbuf, socklen_t(sizeof(sbuf)),
-                    NI_NUMERICHOST | NI_NUMERICSERV);
-
-                if( r == 0 )
-                    container.push_back(hbuf);
-            }
-        }
-
-        return container;
-    }
-
-    static auto wildcards() {
-        return wildcards<std::vector<std::string>>();
-    }
-
-    template <typename T,
-        typename = std::enable_if_t<
-            std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
-            std::is_base_of<T::value_type, std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>>::value
-        >
-    >
-    static T interfaces() {
-        T container;
-#if _WIN32
-        base_socket dummy;
-#endif
-        char node[8192], domain[4096];
-
-#if _WIN32
-        auto getdomainname = [] (char * name, size_t len) -> int {
-            DWORD dwSize = DWORD(len);
-
-            if( GetComputerNameExA(ComputerNamePhysicalDnsDomain, name, &dwSize) == FALSE ) {
-                if( GetLastError() == ERROR_MORE_DATA ) {
-                    errno = EINVAL;
-                    return -1;
-                }
-                else {
-                    errno = EFAULT;
-                    return -1; //_com_issue_error(HRESULT_FROM_WIN32(GetLastError()));
-                }
-                //buf = (char *) alloca(dwSize + 1);
-                //if( GetComputerNameExA((COMPUTER_NAME_FORMAT)ComputerNameDnsDomain, buf, &dwSize) == 0 ) {
-                    //hr =   HRESULT_FROM_WIN32(GetLastError());
-                    //errno = EFAULT;
-                    //return -1;
-                //}
-            }
-            else if( GetLastError() != NO_ERROR ){
-                errno = EFAULT;
-                return -1; //_com_issue_error(HRESULT_FROM_WIN32(GetLastError()));
-            }
-
-            return 0;
-        };
-#endif
-
-        if( gethostname(node, sizeof(domain)) == 0
-            && getdomainname(domain, sizeof(domain)) == 0 ) {
-
-            if( slen(domain) != 0 )
-                scat(scat(node, "."), domain);
-
-            addrinfo hints, * result, * rp;
-
-            memset(&hints, 0, sizeof(addrinfo));
-            hints.ai_family     = AF_UNSPEC;    // Allow IPv4 or IPv6
-            hints.ai_socktype   = 0;
-            hints.ai_flags      = AI_ALL;
-            hints.ai_protocol   = 0;            // Any protocol
-            hints.ai_canonname  = nullptr;
-            hints.ai_addr       = nullptr;
-            hints.ai_next       = nullptr;
-
-            auto r = getaddrinfo(node, "0", &hints, &result);
-
-            if( r == 0 ) {
-                at_scope_exit( freeaddrinfo(result) );
-
-                for( rp = result; rp != nullptr; rp = rp->ai_next ) {
-                    char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
-
-                    if( getnameinfo(rp->ai_addr, socklen_t(rp->ai_addrlen),
-                            hbuf, socklen_t(sizeof(hbuf)),
-                            sbuf, socklen_t(sizeof(sbuf)),
-                            NI_NUMERICHOST | NI_NUMERICSERV) == 0 )
-                        container.push_back(hbuf);
-                }
-            }
-        }
-
-        return container;
-    }
-
-    static auto interfaces() {
-        return interfaces<std::vector<std::string>>();
-    }
-
     passive_socket & listen(const char * node, const char * service, int backlog = 0) {
         addrinfo hints, * result, * rp;
 
@@ -1545,10 +2070,10 @@ public:
 #   if QT_CORE_LIB
                 QString::fromWCharArray(gai_strerrorW(r)).toStdString()
 #   else
-                ::gai_strerrorA(r)
+                gai_strerrorA(r)
 #   endif
 #else
-                ::gai_strerror(r)
+                gai_strerror(r)
 #endif
             );
         }
@@ -1556,7 +2081,7 @@ public:
         auto exceptions_safe = exceptions_;
 
         at_scope_exit(
-            ::freeaddrinfo(result);
+            freeaddrinfo(result);
             exceptions_ = exceptions_safe;
         );
 
@@ -1609,19 +2134,20 @@ public:
             return *this;
         }
 
-        if( socket_type_ == SocketTypeTcp )
+        if( socket_type_ == SocketTypeTCP )
             if( ::listen(socket_, int(backlog)) == SocketError ) {
                 throw_translate_socket_error();
                 return *this;
             }
 
+        interrupt_ = false;
         socket_errno_ = SocketSuccess;
 
         return *this;
     }
 
     active_socket * accept() {
-        if( socket_type_ != SocketTypeTcp ) {
+        if( socket_type_ != SocketTypeTCP ) {
             socket_errno_ = SocketProtocolError;
             throw_socket_error();
             return nullptr;
@@ -1666,7 +2192,7 @@ public:
     }
 protected:
 private:
-    passive_socket(const passive_socket & socket);
+    passive_socket(const passive_socket & base_socket);
     void operator = (const passive_socket &);
 };
 //------------------------------------------------------------------------------
@@ -1676,10 +2202,10 @@ template <class _Elem, class _Traits>
 class basic_socket_streambuf : public std::basic_streambuf<_Elem, _Traits> {
 public:
 #if __GNUG__
-    typedef typename std::basic_streambuf<_Elem, _Traits> __streambuf_type;
-    typedef typename __streambuf_type::traits_type traits_type;
-    typedef typename __streambuf_type::char_type   char_type;
-    typedef typename __streambuf_type::int_type    int_type;
+    using typename std::basic_streambuf<_Elem, _Traits>::__streambuf_type;
+    using typename __streambuf_type::traits_type;
+    using typename __streambuf_type::char_type;
+    using typename __streambuf_type::int_type;
 
     using __streambuf_type::gptr;
     using __streambuf_type::egptr;
@@ -1843,7 +2369,8 @@ template <class _Elem, class _Traits>
 class basic_socket_istream : public std::basic_istream<_Elem, _Traits> {
 public:
 #if __GNUG__
-    typedef typename std::basic_istream<_Elem, _Traits> __istream_type;
+    using typename std::basic_istream<_Elem, _Traits>::__istream_type;
+    using typename __istream_type::__streambuf_type;
 
     using __istream_type::exceptions;
     using __istream_type::unsetf;
@@ -1852,21 +2379,32 @@ public:
 #endif
 
     basic_socket_istream(basic_socket_streambuf<_Elem, _Traits> * sbuf) :
-        std::basic_istream<_Elem, _Traits>(sbuf, std::ios_base::binary) {
+        std::basic_istream<_Elem, _Traits>(sbuf
+#if __GNUG__ > 5 || _MSC_VER
+            , std::ios::binary
+#endif
+        )
+    {
         // http://en.cppreference.com/w/cpp/io/basic_ios/exceptions
-        exceptions(std::ios_base::eofbit | std::ios_base::failbit | std::ios_base::badbit);
-        unsetf(std::ios_base::skipws);
-        unsetf(std::ios_base::unitbuf);
+        exceptions(std::ios::eofbit | std::ios::failbit | std::ios::badbit);
+        unsetf(std::ios::skipws);
+        unsetf(std::ios::unitbuf);
     }
 
-    template <typename _Alloc>
-    auto & operator >> (std::basic_string<_Elem, _Traits, _Alloc> & s) {
+    /*template <typename T,
+        typename = std::enable_if_t<
+            std::is_base_of<T, std::basic_string<typename T::value_type, typename T::traits_type, typename T::allocator_type>>::value &&
+            std::is_same<typename T::value_type, _Elem>::value &&
+            std::is_same<typename T::traits_type, _Traits>::value
+        >
+    >
+    auto & operator >> (T & s) {
         // extract a null-terminated string
         for(;;) {
             auto c = rdbuf()->sbumpc();
 
             if( c == _Traits::eof() ) {
-                setstate(std::ios_base::eofbit);
+                setstate(std::ios::eofbit);
                 break;
             }
 
@@ -1877,15 +2415,30 @@ public:
         }
 
         return *this;
-    }
+    }*/
 
-    typedef std::basic_istream<_Elem, _Traits> & (* __func_manipul_type)(std::basic_istream<_Elem, _Traits> &);
+    //typedef std::basic_istream<_Elem, _Traits> & (* __func_manipul_type)(std::basic_istream<_Elem, _Traits> &);
 
-    basic_socket_istream<_Elem, _Traits> & operator << (__func_manipul_type f) {
-        (*f) (*this);
-        return *this;
-    }
+    //basic_socket_istream<_Elem, _Traits> & operator >> (__func_manipul_type f) {
+
+    //template <typename T,
+    //    typename = std::enable_if_t<
+    //        std::is_base_of<T, std::basic_istream<_Elem, _Traits>>::value
+    //    >
+    //>
+    //basic_socket_istream<_Elem, _Traits> & operator >> (T & (* f)(T &)) {
+    //    (*f) (*this);
+    //    return *this;
+    //}
 };
+//------------------------------------------------------------------------------
+template <class _Elem, class _Traits, class _Alloc> inline
+std::basic_istream<_Elem, _Traits> & operator >> (
+    basic_socket_istream<_Elem, _Traits> & ss,
+    std::basic_string<_Elem, _Traits, _Alloc> & s)
+{
+    return std::getline(*static_cast<std::basic_istream<_Elem, _Traits> *>(&ss), s, _Elem());
+}
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
@@ -1893,7 +2446,8 @@ template <class _Elem, class _Traits>
 class basic_socket_ostream : public std::basic_ostream<_Elem, _Traits> {
 public:
 #if __GNUG__
-    typedef typename std::basic_ostream<_Elem, _Traits> __ostream_type;
+    using typename std::basic_ostream<_Elem, _Traits>::__ostream_type;
+    using typename __ostream_type::__streambuf_type;
 
     using __ostream_type::exceptions;
     using __ostream_type::unsetf;
@@ -1902,27 +2456,53 @@ public:
 #endif
 
     basic_socket_ostream(basic_socket_streambuf<_Elem, _Traits> * sbuf) :
-        std::basic_ostream<_Elem, _Traits>(sbuf, std::ios_base::binary) {
+        std::basic_ostream<_Elem, _Traits>(sbuf
+#if __GNUG__ > 5 || _MSC_VER
+            , std::ios::binary
+#endif
+        )
+    {
         // http://en.cppreference.com/w/cpp/io/basic_ios/exceptions
-        exceptions(std::ios_base::failbit | std::ios_base::badbit);
-        unsetf(std::ios_base::skipws);
-        unsetf(std::ios_base::unitbuf);
+        exceptions(std::ios::failbit | std::ios::badbit);
+        unsetf(std::ios::skipws);
+        unsetf(std::ios::unitbuf);
     }
 
-    template <typename _Alloc>
-    auto & operator << (const std::basic_string<_Elem, _Traits, _Alloc> & s) {
-        // send a null-terminated string
-        *static_cast<std::basic_ostream<_Elem, _Traits> *>(this) << (s) << std::ends;
-        return *this;
-    }
+    //template <typename T,
+    //    typename = std::enable_if_t<
+    //        std::is_base_of<T, std::basic_string<typename T::value_type, typename T::traits_type, typename T::allocator_type>>::value &&
+    //        std::is_same<typename T::value_type, _Elem>::value &&
+    //        std::is_same<typename T::traits_type, _Traits>::value
+    //    >
+    //>
+    //auto & operator << (const T & s) {
+    //    // send a null-terminated string
+    //    *static_cast<std::basic_ostream<_Elem, _Traits> *>(this) << (s) << std::ends;
+    //    return *this;
+    //}
 
-    typedef std::basic_ostream<_Elem, _Traits> & (* __func_manipul_type)(std::basic_ostream<_Elem, _Traits> &);
+    //typedef std::basic_ostream<_Elem, _Traits> & (* __func_manipul_type)(std::basic_ostream<_Elem, _Traits> &);
 
-    basic_socket_ostream<_Elem, _Traits> & operator << (__func_manipul_type f) {
-        (*f) (*this);
-        return *this;
-    }
+    //basic_socket_ostream<_Elem, _Traits> & operator << (__func_manipul_type f) {
+
+    //template <typename T,
+    //    typename = std::enable_if_t<
+    //        std::is_base_of<T, std::basic_ostream<_Elem, _Traits>>::value
+    //    >
+    //>
+    //basic_socket_ostream<_Elem, _Traits> & operator << (T & (* f)(T &)) {
+    //    (*f) (*this);
+    //    return *this;
+    //}
 };
+//------------------------------------------------------------------------------
+template <class _Elem, class _Traits, class _Alloc> inline
+std::basic_ostream<_Elem, _Traits> & operator << (
+    basic_socket_ostream<_Elem, _Traits> & ss,
+    const std::basic_string<_Elem, _Traits, _Alloc> & s)
+{
+    return *static_cast<std::basic_ostream<_Elem, _Traits> *>(&ss) << s << std::ends;
+}
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------

@@ -23,6 +23,7 @@
  */
 //------------------------------------------------------------------------------
 #include "scope_exit.hpp"
+#include "port.hpp"
 #include "socket.hpp"
 #include "server.hpp"
 //#include "dlib/assert.h"
@@ -33,103 +34,137 @@ namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-void tcp_server::incomingConnection(qintptr socket)
+void server::announcer()
 {
-    server_->incoming_connection(socket);
+
 }
 //------------------------------------------------------------------------------
-////////////////////////////////////////////////////////////////////////////////
-//------------------------------------------------------------------------------
-void server::incoming_connection(qintptr socket)
+void server::listener(std::shared_ptr<passive_socket> socket)
 {
-    pool_->enqueue([=] {
-        worker(socket);
-    });
-}
-//------------------------------------------------------------------------------
-void server::listener()
-{
-    server_->setParent(nullptr);
-    server_->moveToThread(QThread::currentThread());
+    auto listen_func = [&] (auto socket) {
+        auto w = std::bind(&server::worker, this, std::placeholders::_1);
 
-    while( !shutdown_ ) {
-        if( !server_->isListening() )
-            if( !server_->listen(QHostAddress::Any, 65535) )
-                std::qerr << server_->errorString();
+        while( !shutdown_ ) {
+            auto s = socket->accept_shared();
 
-        //if( server_->waitForNewConnection(-1) )
-        //    pool_->enqueue([&] {
-        //        worker(server_->nextPendingConnection());
-        //    });
-            //pool_->start(new ThreadCallback([&] {
-            //    worker(server_->nextPendingConnection());
-            //}));
-    }
-}
-//------------------------------------------------------------------------------
-void server::worker(qintptr socket_handle)
-{
-    QTcpSocket * socket = new QTcpSocket;
+            if( shutdown_ || !s || s->invalid() || s->fail() || socket->interrupt() )
+                break;
 
-    if( !socket->setSocketDescriptor(socket_handle, QAbstractSocket::ConnectedState, QIODevice::ReadWrite) ) {
-        std::qerr << socket->errorString();
-        return;
-    }
-
-    //socket->setParent(nullptr);
-    //socket->moveToThread(QThread::currentThread());
-    QByteArray block;
-    QDataStream out(&block, QIODevice::WriteOnly);
-    out.setVersion(QDataStream::Qt_DefaultCompiledVersion);
-    out << QString::fromUtf8("0123456789");
-    socket->write(block);
-    socket->waitForBytesWritten(100);
-
-    auto at_exit = [&] {
-        socket->disconnectFromHost();
-#ifndef _WIN32
-        socket->waitForDisconnected(100);
-#endif
-        socket->close();
-        delete socket;
+            pool_->enqueue(w, s);
+        }
     };
 
-    at_scope_exit(at_exit());
+    if( socket ) {
+        listen_func(socket);
+    }
+    else {
+        port_ = std::ihash<uint16_t>(clock_gettime_ns());
+
+        if( port_ < 1024 )
+            port_ += 1024;
+
+        auto reinitialize = [&] {
+            auto port = std::to_string(std::rhash(port_));
+            auto wildcards = base_socket::wildcards();
+
+            std::unique_lock<std::mutex> lock(mtx_);
+
+            for( auto s : sockets_ )
+                s->interrupt(true).close();
+
+            sockets_.clear();
+
+            for( size_t i = 0; i < wildcards.size(); i++ ) {
+                if( sockets_.size() <= i )
+                    sockets_.emplace_back(std::make_shared<passive_socket>());
+
+                sockets_[i]->exceptions(false);
+
+                if( !sockets_[i]->listen(wildcards[i], port) ) {
+                    sockets_.clear();
+                    break;
+                }
+            }
+
+            for( size_t i = 1; i < sockets_.size(); i++ )
+                pool_->enqueue(listen_func, sockets_[i]);
+        };
+
+        while( !shutdown_ ) {
+            reinitialize();
+
+            if( sockets_.empty() ) {
+                if( ++port_ < 1024 )
+                    port_ += 1024;
+            }
+            else {
+                natpmp_.reset(new natpmp_client);
+                natpmp_->private_port(port_);
+                natpmp_->port_mapping_lifetime(10);
+                natpmp_->mapped_callback(&server::announcer, this);
+                natpmp_->startup();
+
+                listen_func(sockets_[0]);
+            }
+
+            std::unique_lock<std::mutex> lock(mtx_);
+            cv_.wait_for(lock, std::chrono::seconds(30), [&] { return shutdown_; });
+        }
+    }
+}
+//------------------------------------------------------------------------------
+void server::worker(std::shared_ptr<active_socket> socket)
+{
+    socket_stream_buffered ss(*socket);
+
+    try {
+        std::string s;
+        ss >> s;
+        //cdc512 ctx(s.begin(), s.end());
+        //ss << ctx.to_short_string() << std::flush;
+
+        //std::unique_lock<std::mutex> lock(mtx);
+        //std::qerr
+        //    << "accepted: "
+        //    << std::to_string(client_socket->local_addr())
+        //    << " -> "
+        //    << std::to_string(client_socket->remote_addr())
+        //    << std::endl;
+    }
+    catch( const std::ios_base::failure & e ) {
+        std::unique_lock<std::mutex> lock(mtx_);
+        std::qerr << e << std::endl;
+        throw;
+    }
 }
 //------------------------------------------------------------------------------
 void server::startup()
 {
-    if( server_ != nullptr )
+    if( thread_ != nullptr )
         return;
 
     shutdown_ = false;
-
-    server_ = new tcp_server(this);
-
-    if( !server_->listen(QHostAddress::Any, 65535) )
-        std::qerr << server_->errorString();
-
-    //pool_.reset(new thread_pool<server_thread>);
+    thread_.reset(new std::thread(&server::listener, this, nullptr));
     pool_.reset(new thread_pool_t);
-    //pool_->enqueue([&] { listener(); });
 }
 //------------------------------------------------------------------------------
 void server::shutdown()
 {
-    if( server_ == nullptr )
+    if( thread_ == nullptr )
         return;
 
-    std::unique_lock<std::mutex> lk(mtx_);
+    std::unique_lock<std::mutex> lock(mtx_);
     shutdown_ = true;
-    server_->close();
-    lk.unlock();
-    cv_.notify_one();
+    for( auto s : sockets_ )
+        s->interrupt(true).close();
+    lock.unlock();
 
-    //thread_->quit();
-    //thread_->wait();
+    thread_->join();
 
+    thread_ = nullptr;
     pool_ = nullptr;
-    server_ = nullptr;
+    natpmp_ = nullptr;
+    sockets_.clear();
 }
 //------------------------------------------------------------------------------
 } // namespace homeostas

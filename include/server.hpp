@@ -35,102 +35,43 @@
 #include <atomic>
 #include <condition_variable>
 #include <type_traits>
-#include <QPointer>
-#include <QRunnable>
-#include <QThread>
-#include <QThreadPool>
-#include <QTcpSocket>
-#include <QTcpServer>
-#include <QHostAddress>
-#include <QByteArray>
-#include <QDataStream>
-#include <QIODevice>
 //------------------------------------------------------------------------------
 #include "thread_pool.hpp"
 #include "socket.hpp"
+#include "natpmp.hpp"
 #include "tracker.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-class server_thread : public QThread {
-        Q_OBJECT
-    private:
-        std::function<void()> task_ = nullptr;
-    protected:
-        void run() Q_DECL_OVERRIDE {
-            task_();
-        }
-    public:
-        template <class F, class... Args>
-        explicit server_thread(F&& f, Args&&... args) {
-            using return_type = typename std::result_of<F(Args...)>::type;
-            auto task = std::make_shared<std::packaged_task<return_type()> >(
-                std::bind(std::forward<F>(f), std::forward<Args>(args)...)
-            );
-            task_ = [task] { (*task)(); };
-            start();
-        }
-
-        template <typename = std::is_base_of<QThread, server_thread>>
-        void join() {
-            wait();
-        }
-
-        struct this_thread {
-            static uintptr_t get_id() {
-                return reinterpret_cast<uintptr_t>(QThread::currentThreadId());
-            }
-        };
-    //public slots:
-    //signals:
-    //    void resultReady(const QString &s);
-};
-//------------------------------------------------------------------------------
-////////////////////////////////////////////////////////////////////////////////
-//------------------------------------------------------------------------------
-class server;
-//------------------------------------------------------------------------------
-class tcp_server : public QTcpServer {
-        Q_OBJECT
-    public:
-        tcp_server(server * server) : server_(server) {}
-    protected:
-        void incomingConnection(qintptr socket) Q_DECL_OVERRIDE;
-    private:
-        server * server_;
-};
-//------------------------------------------------------------------------------
-////////////////////////////////////////////////////////////////////////////////
-//------------------------------------------------------------------------------
 class server {
-    friend class tcp_server;
-    private:
-        QPointer<tcp_server> server_;
-        //QPointer<server_thread> thread_;
-        //QPointer<QThreadPool> pool_;
-        //std::unique_ptr<thread_pool<server_thread>> pool_;
-        std::unique_ptr<thread_pool_t> pool_;
-        std::mutex mtx_;
-        std::condition_variable cv_;
-        bool shutdown_;
+public:
+    ~server() {
+        shutdown();
+    }
 
-        void listener();
-        void incoming_connection(qintptr socket);
-        void worker(qintptr socket_handle);
-    protected:
-    public:
-        ~server() {
-            shutdown();
-        }
+    bool started() const {
+        return thread_ != nullptr;
+    }
 
-        bool started() const {
-            return server_ != nullptr;
-        }
+    void startup();
+    void shutdown();
+protected:
+    void announcer();
+    void listener(std::shared_ptr<passive_socket> socket);
+    void worker(std::shared_ptr<active_socket> socket);
 
-        void startup();
-        void shutdown();
+    std::unique_ptr<natpmp_client> natpmp_;
+    std::vector<std::shared_ptr<passive_socket>> sockets_;
+    std::unique_ptr<std::thread> thread_;
+    std::unique_ptr<thread_pool_t> pool_;
+    std::mutex mtx_;
+    std::condition_variable cv_;
+
+    uint16_t port_;
+
+    bool shutdown_;
 };
 //------------------------------------------------------------------------------
 namespace tests {

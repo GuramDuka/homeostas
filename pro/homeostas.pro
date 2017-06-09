@@ -19,7 +19,7 @@ CONFIG += c++14
         contains(CXX_VERSION, "5.[0-9]\\.?[0-9,x]?") {
             #message("g++ version 5.x found")
             QMAKE_GNUC = 5
-            CONFIG += c++1y
+            #CONFIG += c++1y
         }
         else {
             contains(CXX_VERSION, "4.[0-9]\\.?[0-9,x]?") {
@@ -37,9 +37,10 @@ CONFIG += c++14
 #contains(QMAKE_COMPILER, "msvc") {
 #}
 *msvc {
-    CONFIG += c++17
+    DEFINES += _CRT_SECURE_NO_WARNINGS FKG_FORCED_USAGE
+    #CONFIG += c++17
     isEmpty(QMAKE_CXXFLAGS_OPTIMIZE_FULL): QMAKE_CXXFLAGS_OPTIMIZE_FULL = -Ox
-    QMAKE_CFLAGS += -wd4996
+    #QMAKE_CFLAGS += -wd4996
     QMAKE_CXXFLAGS += -std:c++latest
 }
 
@@ -78,8 +79,8 @@ DEFINES += SQLITE_THREADSAFE=1
 #DEFINES += GIT_VERSION=$$GIT_VERSION
 
 win32 {
-    DEFINES += _WIN32_WINNT=0x0601 _CRT_SECURE_NO_WARNINGS
-    LIBS += -lws2_32
+    DEFINES += _WIN32_WINNT=0x0601
+    LIBS += -lws2_32 -liphlpapi -ladvapi32
 }
 
 SOURCES += \
@@ -105,7 +106,8 @@ SOURCES += \
     ../tests/thread_pool_test.cpp \
     ../src/socket.cpp \
     ../tests/socket_test.cpp \
-    ../src/thread_pool.cpp
+    ../src/thread_pool.cpp \
+    ../src/natpmp.cpp
 
 HEADERS += \
     ../include/cdc512.hpp \
@@ -131,7 +133,8 @@ HEADERS += \
     ../include/numeric/nn.hpp \
     ../include/numeric/tlsf.hpp \
     ../include/numeric/wk.hpp \
-    ../include/socket.hpp
+    ../include/socket.hpp \
+    ../include/natpmp.hpp
 
 INCLUDEPATH += .
 INCLUDEPATH += ../include

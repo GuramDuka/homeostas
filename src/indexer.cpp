@@ -592,26 +592,14 @@ void directory_indexer::reindex(
 
     sqlite3pp::transaction tx(&db);
 
-    auto get_realtime_clock = [] {
-        struct timespec ts;
-
-        clock_gettime(CLOCK_REALTIME, &ts);
-
-        return 1000000000ull * ts.tv_sec + ts.tv_nsec;
-    };
-
     auto ms2ns = [] (auto ms) {
         return 1000ull * ms;
     };
 
-    //struct timespec tx_start; // auto tx_start = std::chrono::system_clock::now();
-    auto tx_start = get_realtime_clock();
+    auto tx_start = clock_gettime_ns();
 
     auto tx_deadline = [&] {
-        //using namespace std::chrono_literals;
-        //auto now = std::chrono::system_clock::now();
-        //auto deadline = tx_start + 100ms;
-        auto now = get_realtime_clock();
+        auto now = clock_gettime_ns();
         auto deadline = tx_start + ms2ns(50);
 
         if( now >= deadline ) {

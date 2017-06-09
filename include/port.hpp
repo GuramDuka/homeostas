@@ -32,26 +32,25 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#if __GNUC__ >= 5 || _MSC_VER
-#include <io.h>
-#include <share.h>
+#if __GNUG__ >= 5 || _MSC_VER
+#   include <io.h>
+#   include <share.h>
 #endif
-#include <ctime>
-#include <cerrno>
-#include <cstring>
 #if _WIN32
-#include <process.h>
+#   include <process.h>
 #else
-#include <dirent.h>
+#   include <dirent.h>
 #endif
+#include <cerrno>
+#include <ctime>
 //------------------------------------------------------------------------------
 #include "locale_traits.hpp"
 //------------------------------------------------------------------------------
 #if _WIN32 && _MSC_VER
 //------------------------------------------------------------------------------
-#ifndef CLOCK_REALTIME
-#define CLOCK_REALTIME 0
-#endif
+#   ifndef CLOCK_REALTIME
+#       define CLOCK_REALTIME 0
+#   endif
 //------------------------------------------------------------------------------
 extern "C" int clock_gettime(int dummy, struct timespec * ct);
 //------------------------------------------------------------------------------
@@ -85,8 +84,15 @@ std::string temp_path(bool no_back_slash = false);
 std::string temp_name(std::string dir = std::string(), std::string pfx = std::string());
 std::string get_cwd(bool no_back_slash = false);
 std::string path2rel(const std::string & path, bool no_back_slash = false);
+uint64_t clock_gettime_ns();
 //------------------------------------------------------------------------------
 } // namespace homeostas
+//------------------------------------------------------------------------------
+// global namespace
+//------------------------------------------------------------------------------
+#if _WIN32 || (__GNUG__ > 0 && __GNUG__ < 5 && __ANDROID__)
+extern "C" int getdomainname(char * name, size_t len);
+#endif
 //------------------------------------------------------------------------------
 #endif // PORT_HPP_INCLUDED
 //------------------------------------------------------------------------------
