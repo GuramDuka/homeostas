@@ -212,6 +212,23 @@ struct socket_addr {
             storage.ss_family == AF_INET6 ? sizeof(saddr6) : 0;
     }
 
+    socket_addr & clear() {
+        memset(this, 0, sizeof(*this));
+        return *this;
+    }
+
+    bool operator == (const socket_addr & s) const {
+        return storage.ss_family == s.storage.ss_family
+            && port() == s.port()
+            && memcmp(addr_data(), s.addr_data(), addr_size()) == 0;
+    }
+
+    bool operator != (const socket_addr & s) const {
+        return storage.ss_family != s.storage.ss_family
+            || port() == s.port()
+            || memcmp(addr_data(), s.addr_data(), addr_size()) != 0;
+    }
+
     auto & from_string(const std::string & addr) {
         const char * p_node = addr.c_str(), * p_service = "0";
         std::string node, service;
@@ -1875,7 +1892,7 @@ public:
         //hints.ai_socktype   = SOCK_DGRAM;   // Datagram socket
         hints.ai_socktype   = socket_type_;
         hints.ai_flags      = AI_ALL;
-        hints.ai_protocol   = 0;            // Any protocol
+        hints.ai_protocol   = socket_proto_;
         hints.ai_canonname  = nullptr;
         hints.ai_addr       = nullptr;
         hints.ai_next       = nullptr;
@@ -2056,7 +2073,7 @@ public:
         //hints.ai_socktype   = SOCK_DGRAM;   // Datagram socket
         hints.ai_socktype   = socket_type_;
         hints.ai_flags      = AI_PASSIVE;   // For wildcard IP address
-        hints.ai_protocol   = 0;            // Any protocol
+        hints.ai_protocol   = socket_proto_;
         hints.ai_canonname  = nullptr;
         hints.ai_addr       = nullptr;
         hints.ai_next       = nullptr;

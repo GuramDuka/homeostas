@@ -59,6 +59,9 @@ void natpmp_client::worker()
     constexpr const char NATPMP_PORT[] = "5351";
 
     socket_->exceptions(false);
+    public_addr_.clear();
+
+    decltype(public_addr_) new_addr;
 
     auto get_public_address = [&] {
         public_address_request req;
@@ -74,9 +77,9 @@ void natpmp_client::worker()
             socket_->recv(&resp, sizeof(resp));
 
             if( resp.result_code == ResultCodeSuccess )
-                memcpy(public_addr_.family(AF_INET).port(0).addr_data(),
+                memcpy(new_addr.family(AF_INET).port(0).addr_data(),
                     &resp.addr,
-                    std::min(size_t(public_addr_.addr_size()), sizeof(resp.addr)));
+                    std::min(size_t(new_addr.addr_size()), sizeof(resp.addr)));
         }
 
         return resp.result_code == ResultCodeSuccess;
@@ -85,8 +88,9 @@ void natpmp_client::worker()
     auto new_port_mapping = [&] {
         new_port_mapping_request req;
 
-        req.private_port = private_port_;
-        req.public_port  = public_addr_.port();
+        req.private_port          = htons(private_port_);
+        req.public_port           = htons(public_addr_.port());
+        req.port_mapping_lifetime = htonl(port_mapping_lifetime_);
 
         socket_->send(&req, sizeof(req));
 
@@ -99,10 +103,12 @@ void natpmp_client::worker()
             socket_->recv(&resp, sizeof(resp));
 
             if( resp.result_code == ResultCodeSuccess ) {//&& resp.op_code == 130 )
-                public_addr_.port(resp.mapped_public_port);
+                new_addr.port(ntohs(resp.mapped_public_port));
 
-                if( mapped_callback_ )
+                if( mapped_callback_ && new_addr != public_addr_ ) {
+                    public_addr_ = new_addr;
                     mapped_callback_();
+                }
             }
         }
 
@@ -114,7 +120,7 @@ void natpmp_client::worker()
 
         if( gateway_.default_gateway(true) ) {
             socket_->close();
-            socket_->open(SocketDomainINET, SocketTypeUDP, SocketProtoIP);
+            //socket_->open(SocketDomainINET, SocketTypeUDP, SocketProtoIP);
             socket_->connect(gateway_.to_string(), NATPMP_PORT);
 
             if( get_public_address() )
@@ -124,7 +130,7 @@ void natpmp_client::worker()
         }
 
         std::unique_lock<std::mutex> lock(mtx_);
-        cv_.wait_for(lock, std::chrono::seconds(30), [&] { return shutdown_; });
+        cv_.wait_for(lock, std::chrono::seconds(3), [&] { return shutdown_; });
     }
 }
 //------------------------------------------------------------------------------

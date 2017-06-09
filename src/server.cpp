@@ -100,7 +100,7 @@ void server::listener(std::shared_ptr<passive_socket> socket)
             else {
                 natpmp_.reset(new natpmp_client);
                 natpmp_->private_port(port_);
-                natpmp_->port_mapping_lifetime(10);
+                natpmp_->port_mapping_lifetime(3600);
                 natpmp_->mapped_callback(&server::announcer, this);
                 natpmp_->startup();
 

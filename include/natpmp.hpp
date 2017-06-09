@@ -123,12 +123,12 @@ protected:
 	};
 
 	struct new_port_mapping_request {
-        uint8_t  version      = 0;
-        uint8_t  op_code      = 2; 		// OP Code = 1 for UDP or 2 for TCP
-        uint16_t reserved     = 0;		// must be 0
-        uint16_t private_port = 0;
-        uint16_t public_port  = 0;      // requested public port or zero for dynamic allocation
-        uint32_t seconds      = 0;		// Requested port mapping lifetime in seconds
+        uint8_t  version               = 0;
+        uint8_t  op_code               = 2; 		// OP Code = 1 for UDP or 2 for TCP
+        uint16_t reserved              = 0;		// must be 0
+        uint16_t private_port          = 0;
+        uint16_t public_port           = 0;      // requested public port or zero for dynamic allocation
+        uint32_t port_mapping_lifetime = 0;		// Requested port mapping lifetime in seconds
 	};
 
 	struct new_port_mapping_response {
