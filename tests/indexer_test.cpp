@@ -77,7 +77,7 @@ void indexer_test()
 		std::sort(lst.begin(), lst.end(), sorter);
 
         for( const auto & e : lst )
-            std::qerr << e.name_ << std::endl;
+            std::cerr << e.name_ << std::endl;
 
 		directory_indexer di;
         //string db_name = temp_path(false) + "indexer_test.sqlite";
@@ -94,7 +94,7 @@ void indexer_test()
 			PRAGMA page_size = 4096;
 			PRAGMA journal_mode = WAL;
 			PRAGMA count_changes = OFF;
-			PRAGMA auto_vacuum = NONE;
+            PRAGMA auto_vacuum = FULL;
 			PRAGMA cache_size = -2048;
 			PRAGMA synchronous = NORMAL;
 			PRAGMA temp_store = MEMORY;
@@ -106,14 +106,14 @@ void indexer_test()
 
 	}
     catch (const std::exception & e) {
-        std::qerr << e << std::endl;
+        std::cerr << e << std::endl;
         fail = true;
     }
     catch (...) {
 		fail = true;
 	}
 
-    std::qerr << "indexer test " << (fail ? "failed" : "passed") << std::endl;
+    std::cerr << "indexer test " << (fail ? "failed" : "passed") << std::endl;
 }
 //------------------------------------------------------------------------------
 } // namespace tests

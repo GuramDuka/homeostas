@@ -40,28 +40,28 @@ void server_test()
 
     try {
         for( auto iface : QNetworkInterface::allInterfaces() ) {
-            std::qerr
+            std::cerr
                 << "if: " << iface.humanReadableName().toStdString()
                 << " " << iface.name().toStdString()
                 << std::endl;
-            std::qerr << "     hardware: " << iface.hardwareAddress().toStdString() << std::endl;
+            std::cerr << "     hardware: " << iface.hardwareAddress().toStdString() << std::endl;
 
             for( auto addr : iface.addressEntries() ) {
-                std::qerr << "           ip: " << addr.ip().toString().toStdString() << std::endl;
-                std::qerr << "         mask: " << addr.netmask().toString().toStdString() << std::endl;
-                std::qerr << "    broadcast: " << addr.broadcast().toString().toStdString() << std::endl;
+                std::cerr << "           ip: " << addr.ip().toString().toStdString() << std::endl;
+                std::cerr << "         mask: " << addr.netmask().toString().toStdString() << std::endl;
+                std::cerr << "    broadcast: " << addr.broadcast().toString().toStdString() << std::endl;
             }
         }
     }
     catch (const std::exception & e) {
-        std::qerr << e << std::endl;
+        std::cerr << e << std::endl;
         fail = true;
     }
     catch (...) {
         fail = true;
     }
 
-    std::qerr << "server test " << (fail ? "failed" : "passed") << std::endl;
+    std::cerr << "server test " << (fail ? "failed" : "passed") << std::endl;
 }
 //------------------------------------------------------------------------------
 } // namespace tests

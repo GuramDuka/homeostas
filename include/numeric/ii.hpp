@@ -489,20 +489,6 @@ class integer {
 		integer tmul_v(const integer & v) const;
 };
 //------------------------------------------------------------------------------
-#if ENABLE_STATISTICS
-#   if DISABLE_ATOMIC_COUNTER
-        static uintptr_t integer::stat_iadd_ = 0;
-        static uintptr_t integer::stat_isub_ = 0;
-        static uintptr_t integer::stat_imul_ = 0;
-        static uintptr_t integer::stat_idiv_ = 0;
-#   else
-        static std::atomic_uintptr_t integer::stat_iadd_(0);
-        static std::atomic_uintptr_t integer::stat_isub_(0);
-        static std::atomic_uintptr_t integer::stat_imul_(0);
-        static std::atomic_uintptr_t integer::stat_idiv_(0);
-#   endif
-#endif
-//------------------------------------------------------------------------------
 #if _MSC_VER || HAVE_LONG_DOUBLE
 inline integer::integer(double v) : integer((long double) v) {}
 inline integer::integer(long double v) : integer(0)

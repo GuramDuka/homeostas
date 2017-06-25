@@ -40,6 +40,7 @@
 #include "socket.hpp"
 #include "natpmp.hpp"
 #include "tracker.hpp"
+#include "announcer.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
@@ -58,14 +59,14 @@ public:
     void startup();
     void shutdown();
 protected:
-    void announcer();
-    void listener(std::shared_ptr<passive_socket> socket);
+    void listener();
     void worker(std::shared_ptr<active_socket> socket);
 
-    std::unique_ptr<natpmp_client> natpmp_;
+    std::unique_ptr<natpmp> natpmp_;
+    std::unique_ptr<announcer> announcer_;
+    std::vector<socket_addr> public_addrs_;
     std::vector<std::shared_ptr<passive_socket>> sockets_;
     std::unique_ptr<std::thread> thread_;
-    std::unique_ptr<thread_pool_t> pool_;
     std::mutex mtx_;
     std::condition_variable cv_;
 

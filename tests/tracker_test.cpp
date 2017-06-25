@@ -44,14 +44,14 @@ void tracker_test()
         dt.shutdown();
 	}
     catch (const std::exception & e) {
-        std::qerr << e << std::endl;
+        std::cerr << e << std::endl;
         fail = true;
     }
     catch (...) {
 		fail = true;
 	}
 
-    std::qerr << "tracker test " << (fail ? "failed" : "passed") << std::endl;
+    std::cerr << "tracker test " << (fail ? "failed" : "passed") << std::endl;
 }
 //------------------------------------------------------------------------------
 } // namespace tests

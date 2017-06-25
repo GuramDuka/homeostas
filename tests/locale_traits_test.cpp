@@ -35,7 +35,7 @@ void locale_traits_test()
 	bool fail = false;
 
     auto loc = std::locale();
-    std::qerr << "locale name: " << loc.name() << std::endl;
+    std::cerr << "locale name: " << loc.name() << std::endl;
 
 	try {
         QString s1 = "А", s2 = "Б", s3 = "Я";
@@ -46,18 +46,18 @@ void locale_traits_test()
 
         if( !a1 || !a2 || !a3 )
             a1 = a2 = a3;
-            //throw std::runtime_error("bad locale traits implementation");
+            //throw std::xruntime_error("bad locale traits implementation");
 
 	}
     catch (const std::exception & e) {
-        std::qerr << e << std::endl;
+        std::cerr << e << std::endl;
         fail = true;
     }
     catch (...) {
 		fail = true;
 	}
 
-    std::qerr << "locale traits test " << (fail ? "failed" : "passed") << std::endl;
+    std::cerr << "locale traits test " << (fail ? "failed" : "passed") << std::endl;
 }
 //------------------------------------------------------------------------------
 } // namespace tests

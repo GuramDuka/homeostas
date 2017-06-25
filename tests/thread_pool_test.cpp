@@ -38,14 +38,14 @@ void thread_pool_test()
         thread_pool_t pool;
     }
     catch (const std::exception & e) {
-        std::qerr << e << std::endl;
+        std::cerr << e << std::endl;
         fail = true;
     }
     catch (...) {
         fail = true;
     }
 
-    std::qerr << "thread pool test " << (fail ? "failed" : "passed") << std::endl;
+    std::cerr << "thread pool test " << (fail ? "failed" : "passed") << std::endl;
 }
 //------------------------------------------------------------------------------
 } // namespace tests

@@ -44,18 +44,18 @@ void socket_test()
 
             active_socket client;
             client.connect("myip.ru", "http");
-            std::qerr << std::to_string(client.local_addr()) << std::endl;
-            std::qerr << std::to_string(client.remote_addr()) << std::endl;
+            std::cerr << client.local_addr() << std::endl;
+            std::cerr << client.remote_addr() << std::endl;
             client.send(
                 "GET / HTTP/1.1\r\n"
                 "Host: myip.ru\r\n"
                 "User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:53.0) Gecko/20100101 Firefox/53.0\r\n"
-                "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
+                "Accept: text/html,application/xhtml+xml,application/xml;q=0.9," "*" "/" "*;q=0.8\r\n"
                 "Accept-Language: ru,en-US;q=0.7,en;q=0.3\r\n"
                 "Accept-Encoding: identity\r\n"
                 "Connection: close\r\n"
                 "\r\n");
-            std::qerr << client.recv<std::string>() << std::endl;
+            std::cerr << client.recv<std::string>() << std::endl;
         };
 
         myip(true);
@@ -88,13 +88,13 @@ void socket_test()
                         break;
 
                     pool.enqueue([&] (auto client_socket) {
-                        socket_stream_buffered ss(*client_socket);
+                        socket_stream ss(*client_socket);
 
                         try {
                             std::string s;
                             ss >> s;
                             cdc512 ctx(s.begin(), s.end());
-                            ss << ctx.to_short_string() << std::flush;
+                            ss << ctx.to_string() << std::flush;
 
                             //std::unique_lock<std::mutex> lock(mtx);
                             //std::qerr
@@ -106,7 +106,7 @@ void socket_test()
                         }
                         catch( const std::ios_base::failure & e ) {
                             std::unique_lock<std::mutex> lock(mtx);
-                            std::qerr << e << std::endl;
+                            std::cerr << e << std::endl;
                             throw;
                         }
                     }, socket);
@@ -144,20 +144,20 @@ void socket_test()
 
                     cdc512 ctx1;
                     ctx1.generate_fast_entropy();
-                    const auto s1 = ctx1.to_short_string();
+                    const auto s1 = ctx1.to_string();
                     cdc512 ctx2(s1.begin(), s1.end());
-                    const auto s2 = ctx2.to_short_string();
+                    const auto s2 = ctx2.to_string();
 
                     try {
                         client_socket->connect(wildcards[i % wildcards.size()], lport);
                     }
-                    catch( const std::runtime_error & e ) {
+                    catch( const std::xruntime_error & e ) {
                         std::unique_lock<std::mutex> lock(mtx);
-                        std::qerr << e << std::endl;
+                        std::cerr << e << std::endl;
                         continue;
                     }
 
-                    socket_stream_buffered ss(*client_socket);
+                    socket_stream ss(*client_socket);
 
                     try {
                         ss << s1 << std::flush;
@@ -173,11 +173,11 @@ void socket_test()
                         //    << ", " << (s == s2)
                         //    << std::endl;
                         if( s != s2 )
-                            throw std::runtime_error("invalid implementation");
+                            throw std::xruntime_error("invalid implementation", __FILE__, __LINE__);
                     }
                     catch( const std::ios_base::failure & e ) {
                         std::unique_lock<std::mutex> lock(mtx);
-                        std::qerr << e << std::endl;
+                        std::cerr << e << std::endl;
                         throw;
                     }
                 }
@@ -204,19 +204,19 @@ void socket_test()
         auto pool_stat = pool.stat();
 
         if( !pool_stat.empty() )
-            std::qerr
+            std::cerr
                 << "socket threads pool statistics:" << std::endl
                 << pool_stat;
     }
     catch (const std::exception & e) {
-        std::qerr << e << std::endl;
+        std::cerr << e << std::endl;
         fail = true;
     }
     catch (...) {
         fail = true;
     }
 
-    std::qerr << "socket test " << (fail ? "failed" : "passed") << std::endl;
+    std::cerr << "socket test " << (fail ? "failed" : "passed") << std::endl;
 }
 //------------------------------------------------------------------------------
 } // namespace tests

@@ -32,7 +32,7 @@
 #include "config.h"
 #include "qobjects.hpp"
 //------------------------------------------------------------------------------
-int main(int argc,char ** argv)
+int main(int argc, char ** argv)
 {
     //qSetMessagePattern("[%{type}] %{file}, %{line}: %{message}");
     //homeostas::tests::run_tests();
@@ -45,20 +45,33 @@ int main(int argc,char ** argv)
 
     QQmlApplicationEngine engine;
 
-    Homeostas homeostas;
-    engine.rootContext()->setContextProperty("homeostas", &homeostas);
-    HomeostasConfiguration homeostasConfiguration;
-    engine.rootContext()->setContextProperty("homeostasConfiguration", &homeostasConfiguration);
-    DirectoriesTrackersModel directoriesTrackersModel;
-    engine.rootContext()->setContextProperty("directoriesTrackersModel", &directoriesTrackersModel);
+    engine.rootContext()->setContextProperty("homeostas", Homeostas::instance());
+    engine.rootContext()->setContextProperty("directoriesTrackersModel", DirectoriesTrackersModel::instance());
 
-    homeostas.startTrackers();
-    homeostas.startServer();
+    at_scope_exit(
+        Homeostas::instance()->stopServer();
+        Homeostas::instance()->stopTrackers();
+    );
 
-    engine.load(QUrl(QLatin1String("qrc:/main.qml")));
-    QFontDatabase::addApplicationFont(QLatin1String("qrc:/digital-7.ttf"));
+    try {
+        Homeostas::instance()->startTrackers();
+        Homeostas::instance()->startServer();
+    }
+    catch( const std::exception & e ) {
+        std::cerr << e << std::endl;
+#if QT_CORE_LIB && __ANDROID__
+        qDebug() << QString::fromStdString(e.what());
+#endif
+    }
+    catch( ... ) {
+        std::cerr << "undefined c++ exception catched" << std::endl;
+#if QT_CORE_LIB && __ANDROID__
+        qDebug() << "undefined c++ exception catched";
+#endif
+    }
 
-    std::qerr << homeostas.newUniqueId().toStdString() << std::endl;
+    QFontDatabase::addApplicationFont(QLatin1String(":/digital-7-mono"));
+    engine.load(QUrl("qrc:/main.qml"));
 
     return app.exec();
 }

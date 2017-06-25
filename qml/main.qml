@@ -1,6 +1,6 @@
-import QtQuick 2.7
+import QtQuick 2.5
 import QtQuick.Controls 2.1
-import QtQuick.Window 2.2
+import QtQuick.Window 2.0
 
 ApplicationWindow {
     id: window
@@ -17,7 +17,7 @@ ApplicationWindow {
         z: 100
         smooth: true
         antialiasing: true
-        font.family: "Digital-7"
+        font.family: "Digital-7 Mono"
         font.pointSize: 35
         verticalAlignment: Text.AlignVCenter
         anchors.top: parent.top

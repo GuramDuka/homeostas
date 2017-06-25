@@ -67,7 +67,7 @@ struct file_stat :
     file_stat(const std::string & file_name) {
         auto err = stat(file_name);
         if( err != 0 )
-            throw std::runtime_error(strerror(err));
+            throw std::xruntime_error(strerror(err), __FILE__, __LINE__);
 	}
 
     int stat(const std::string & file_name) noexcept {
@@ -245,15 +245,15 @@ void directory_reader::read(const std::string & root_path)
 			err = GetLastError();
 			if( err == ERROR_PATH_NOT_FOUND )
 				return;
-            throw std::runtime_error(
-                "Failed to open directory: " + path_ + ", " + std::to_string(err));
+            throw std::xruntime_error(
+                "Failed to open directory: " + path_ + ", " + std::to_string(err), __FILE__, __LINE__);
 
 #else
 		if( handle == nullptr ) {
 			err = errno;
 			if( err == ENOTDIR )
 				return;
-            throw std::runtime_error("Failed to open directory: " + path_ + ", " + std::to_string(err));
+            throw std::xruntime_error("Failed to open directory: " + path_ + ", " + std::to_string(err), __FILE__, __LINE__);
 #endif
 		}
 
@@ -286,7 +286,7 @@ void directory_reader::read(const std::string & root_path)
 		for(;;) {
 			if( readdir_r(handle, ent, &result) != 0 ) {
 				err = errno;
-				throw std::runtime_error("Failed to read directory: " + path + ", " + std::to_string(err));
+                throw std::xruntime_error("Failed to read directory: " + path + ", " + std::to_string(err));
 			}
 
 			if( result == nullptr )
@@ -306,7 +306,7 @@ void directory_reader::read(const std::string & root_path)
 
 			if( ent == nullptr ) {
                 if( err != 0 )
-                    throw std::runtime_error("Failed to read directory: " + path_ + ", " + std::to_string(err));
+                    throw std::xruntime_error("Failed to read directory: " + path_ + ", " + std::to_string(err), __FILE__, __LINE__);
 				break;
 			}
 
@@ -340,7 +340,7 @@ void directory_reader::read(const std::string & root_path)
             file_stat fs(path_name_);
 
 			if( (err = errno) != 0 )
-                throw std::runtime_error("Failed to read file info: " + path_name_ + ", " + std::to_string(err));
+                throw std::xruntime_error("Failed to read file info: " + path_name_ + ", " + std::to_string(err), __FILE__, __LINE__);
 
 			//if( (fs.st_mode & type_mask) == 0 )
 			//	continue;
@@ -372,7 +372,7 @@ void directory_reader::read(const std::string & root_path)
 
                 if( ::stat(path_name.c_str(), &st) != 0 ) {
                     err = errno;
-                    throw std::runtime_error("Failed to stat entry: " + path_name + ", " + std::to_string(err));
+                    throw std::xruntime_error("Failed to stat entry: " + path_name + ", " + std::to_string(err));
                 }
 
                 d_type = IFTODT(st.st_mode);
@@ -384,7 +384,7 @@ void directory_reader::read(const std::string & root_path)
 
             if( ::stat(path_name_.c_str(), &st) != 0 ) {
 				err = errno;
-                throw std::runtime_error("Failed to stat entry: " + path_name_ + ", " + std::to_string(err));
+                throw std::xruntime_error("Failed to stat entry: " + path_name_ + ", " + std::to_string(err), __FILE__, __LINE__);
 			}
 
 			if( (st.st_mode & S_IFDIR) != 0 ) {
@@ -420,8 +420,8 @@ void directory_reader::read(const std::string & root_path)
         if( handle != INVALID_HANDLE_VALUE
                 && (err = GetLastError()) != ERROR_NO_MORE_FILES
                 && !abort_ )
-            throw std::runtime_error(
-                "Failed to read directory: " + path_ + ", " + std::to_string(err));
+            throw std::xruntime_error(
+                "Failed to read directory: " + path_ + ", " + std::to_string(err), __FILE__, __LINE__);
 #endif
 	}
 };
@@ -449,7 +449,7 @@ void directory_indexer::reindex(
             is_alive		INTEGER NOT NULL,   /* boolean */
             name			TEXT NOT NULL,      /* file name */
             is_dir			INTEGER,            /* boolean */
-            mtime			INTEGER,            /* INTEGER as Unix Time, the number of seconds since 1970-01-01 00:00:00 UTC. and nanoseconds if supported */
+            mtime			INTEGER,            /* nanoseconds */
             file_size		INTEGER,            /* file size in bytes */
             block_size		INTEGER,            /* file block size in bytes */
             digest			BLOB,               /* file checksum */
@@ -476,7 +476,7 @@ void directory_indexer::reindex(
         CREATE TABLE IF NOT EXISTS blocks_digests (
             entry_id		INTEGER NOT NULL,   /* link on entries rowid */
             block_no		INTEGER NOT NULL,   /* file block number starting from one */
-            mtime			INTEGER,            /* INTEGER as Unix Time, the number of seconds since 1970-01-01 00:00:00 UTC. and nanoseconds if supported */
+            mtime			INTEGER,            /* nanoseconds */
             digest			BLOB,               /* file block checksum */
             UNIQUE(entry_id, block_no) ON CONFLICT ABORT
         )/*WITHOUT ROWID*/;
@@ -617,8 +617,8 @@ void directory_indexer::reindex(
         auto bind = [&] (auto & st) {
             st.bind("entry_id", entry_id);
             st.bind("block_no", blk_no);
-            st.bind("mtime", mtim);
-            st.bind("digest", block_digest, sqlite3pp::nocopy);
+            st.bind("mtime"   , mtim);
+            st.bind("digest"  , block_digest, sqlite3pp::nocopy);
         };
 
         bind(st_blk_ins);
@@ -747,7 +747,7 @@ void directory_indexer::reindex(
         auto err = errno;
 #if _WIN32
         err = _wsopen_s(&in, QString::fromStdString(path_name).toStdWString().c_str(), _O_RDONLY, _SH_DENYNO, _S_IREAD | _S_IWRITE);
-#elif __GNUC__ < 5
+#elif (__GNUG__ > 0 && __GNUC__ < 5)
         in = ::open(path_name.c_str(), O_RDONLY);
         err = in == -1 ? errno : 0;
 #else
@@ -756,7 +756,7 @@ void directory_indexer::reindex(
         //std::wifstream in(dr.path_name, std::ios::binary);
         //in.exceptions(std::ios::failbit | std::ios::badbit);
         if( err != 0 )
-            //throw std::runtime_error(
+            //throw std::xruntime_error(
             //    "Failed open file: " + utf_path_name + ", " + std::to_string(err));
             return false;
 
@@ -783,7 +783,7 @@ void directory_indexer::reindex(
 
             if( i ) {
                 bmtim = i->get<uint64_t>("mtime");
-                i->get(block_digest, "digest");
+                block_digest = i->get<decltype(block_digest)>("digest");
             }
 
             if( bmtim == 0 || bmtim != mtim ) {
@@ -797,7 +797,7 @@ void directory_indexer::reindex(
 
                 if( r == -1 ) {
                     //err = errno;
-                    //throw std::runtime_error(
+                    //throw std::xruntime_error(
                     //    "Failed read file: " + utf_path_name + ", " + std::to_string(err));
                     return false;
                 }
@@ -844,7 +844,7 @@ void directory_indexer::reindex(
 
 			if( pit == parents.cend() ) {
                 if( dr.level_ > 1 )
-					throw std::runtime_error("Undefined behavior");
+                    throw std::xruntime_error("Undefined behavior", __FILE__, __LINE__);
 
                 file_stat st(dr.path_);
                 root.id = update_entry(root, dr.path_, true, root.mtime = st.mtime(), 0, 0, &root.mtim);

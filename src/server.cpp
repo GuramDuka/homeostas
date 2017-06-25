@@ -22,100 +22,230 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
+#include <string>
+//------------------------------------------------------------------------------
 #include "scope_exit.hpp"
 #include "port.hpp"
 #include "socket.hpp"
 #include "server.hpp"
-//#include "dlib/assert.h"
-//#include "dlib/sockets.h"
-//#include "dlib/iosockstream.h"
+#if QT_CORE_LIB
+#   if __ANDROID__
+#       include <QString>
+#       include <QDebug>
+#   endif
+#   include <QNetworkInterface>
+#endif
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-void server::announcer()
+void server::listener()
 {
-
-}
-//------------------------------------------------------------------------------
-void server::listener(std::shared_ptr<passive_socket> socket)
-{
-    auto listen_func = [&] (auto socket) {
+    auto accepter = [this] (auto socket) {
         auto w = std::bind(&server::worker, this, std::placeholders::_1);
 
-        while( !shutdown_ ) {
+        for(;;) {
             auto s = socket->accept_shared();
 
             if( shutdown_ || !s || s->invalid() || s->fail() || socket->interrupt() )
                 break;
 
-            pool_->enqueue(w, s);
+            thread_pool_t::instance()->enqueue(w, s);
         }
     };
 
-    if( socket ) {
-        listen_func(socket);
-    }
-    else {
-        port_ = std::ihash<uint16_t>(clock_gettime_ns());
+    auto addr_equ = [] (const auto & a, const auto & b) {
+        return a.addr_equ(b);
+    };
 
-        if( port_ < 1024 )
-            port_ += 1024;
+    auto port = std::ihash<uint16_t>(clock_gettime_ns());
+    std::vector<socket_addr> interfaces;
 
-        auto reinitialize = [&] {
-            auto port = std::to_string(std::rhash(port_));
-            auto wildcards = base_socket::wildcards();
+    auto recheck_interfaces = [&] {
+        std::vector<socket_addr> t;
 
-            std::unique_lock<std::mutex> lock(mtx_);
+        for( const auto & ifs : basic_socket::interfaces() )
+            t.emplace_back(ifs);
 
-            for( auto s : sockets_ )
-                s->interrupt(true).close();
+#if QT_CORE_LIB
+        if( t.empty() ) {
+            socket_addr a;
 
+            for( const auto & iface : QNetworkInterface::allInterfaces() )
+                for( const auto & addr : iface.addressEntries() ) {
+                    const auto & ip = addr.ip();
+                    if( ip.protocol() == QAbstractSocket::IPv4Protocol ) {
+                        a.family(AF_INET);
+                        a.saddr4.sin_addr.s_addr = htonl(ip.toIPv4Address());
+                    }
+                    else if( ip.protocol() == QAbstractSocket::IPv6Protocol ) {
+                        a.family(AF_INET6);
+                        Q_IPV6ADDR a6 = ip.toIPv6Address();
+                        memcpy(&a.saddr6.sin6_addr, &a6, std::min(sizeof(a.saddr6.sin6_addr), sizeof(Q_IPV6ADDR)));
+                    }
+
+                    if( a.family() != AF_UNSPEC )
+                        t.push_back(a);
+                }
+        }
+#endif
+
+        std::sort(t.begin(), t.end());
+
+        auto r = !std::equal(t.begin(), t.end(), interfaces.begin(), interfaces.end(), addr_equ)
+            && t.size() != interfaces.size();
+
+        if( r )
+            interfaces = std::move(t);
+
+        return r;
+    };
+
+    auto recheck_public_addrs = [&] {
+        std::vector<socket_addr> t;
+
+        for( const auto & a : interfaces ) {
+            if( a.is_site_local() || a.is_link_local() || a.is_loopback() || a.is_wildcard() )
+                continue;
+            t.emplace_back(a);
+            t.back().port(port_);
+        }
+
+        std::sort(t.begin(), t.end());
+
+        std::unique_lock<std::mutex> lock(mtx_);
+
+        auto r = !std::equal(t.begin(), t.end(), public_addrs_.begin(), public_addrs_.end(), addr_equ)
+            && t.size() != public_addrs_.size();
+
+        if( r )
+            public_addrs_ = std::move(t);
+
+        return r;
+    };
+
+    auto reinitialize = [&] {
+        port_ = std::rhash(port);
+
+        std::unique_lock<std::mutex> lock(mtx_);
+
+        for( auto s : sockets_ )
+            s->interrupt(true).close();
+
+        sockets_.clear();
+
+        for( size_t i = 0; i < interfaces.size(); i++ ) {
+            if( sockets_.size() <= i )
+                sockets_.emplace_back(std::make_shared<passive_socket>());
+
+            if( !sockets_[i]->listen(interfaces[i].port(port_)) )
+                break;
+        }
+
+        if( sockets_.size() != interfaces.size() )
             sockets_.clear();
 
-            for( size_t i = 0; i < wildcards.size(); i++ ) {
-                if( sockets_.size() <= i )
-                    sockets_.emplace_back(std::make_shared<passive_socket>());
+        for( size_t i = 0; i < sockets_.size(); i++ )
+            thread_pool_t::instance()->enqueue(accepter, sockets_[i]);
+    };
 
-                sockets_[i]->exceptions(false);
+    auto wait = [&] (const std::chrono::seconds & s) {
+        std::unique_lock<std::mutex> lock(mtx_);
+        cv_.wait_for(lock, s, [&] { return shutdown_; });
+    };
 
-                if( !sockets_[i]->listen(wildcards[i], port) ) {
-                    sockets_.clear();
-                    break;
+    while( !shutdown_ ) {
+        try {
+            at_scope_exit(
+                announcer_ = nullptr;
+                natpmp_ = nullptr;
+            );
+
+            while( !shutdown_ ) {
+                bool port_changed = false;
+
+                while( !shutdown_ ) {
+                    if( port < 1024 )
+                        port += 1024;
+
+                    if( recheck_interfaces() || sockets_.empty() )
+                        reinitialize();
+
+                    if( !sockets_.empty() )
+                        break;
+
+                    port_++;
+                    port_changed = true;
+
+                    wait(std::chrono::seconds(interfaces.empty() ? 60 : 1));
                 }
+
+                if( shutdown_ )
+                    break;
+
+                bool public_addrs_changed = recheck_public_addrs();
+
+                if( public_addrs_.empty() ) {
+                    if( natpmp_ == nullptr || natpmp_->private_port() != port_ )
+                        public_addrs_changed = true;
+
+                    if( public_addrs_changed ) {
+                        if( natpmp_ == nullptr )
+                            natpmp_.reset(new natpmp);
+
+                        natpmp_->shutdown();
+
+                        natpmp_->private_port(port_);
+                        natpmp_->port_mapping_lifetime(60);
+                        natpmp_->mapped_callback([&] {
+                            std::vector<socket_addr> t;
+                            t.emplace_back(natpmp_->public_addr());
+                            std::cerr << t.back() << std::endl;
+#if QT_CORE_LIB && __ANDROID__
+                            qDebug() << QString::fromStdString(std::to_string(t.back()));
+#endif
+
+                            announcer_.reset(new announcer);
+                            announcer_->pubs(t);
+                            announcer_->startup();
+                        });
+                        natpmp_->startup();
+                    }
+                }
+                else {
+                    natpmp_ = nullptr;
+
+                    if( public_addrs_changed || port_changed ) {
+                        announcer_.reset(new announcer);
+                        announcer_->pubs(public_addrs_);
+                        announcer_->startup();
+                    }
+                }
+
+                wait(std::chrono::seconds(60));
             }
-
-            for( size_t i = 1; i < sockets_.size(); i++ )
-                pool_->enqueue(listen_func, sockets_[i]);
-        };
-
-        while( !shutdown_ ) {
-            reinitialize();
-
-            if( sockets_.empty() ) {
-                if( ++port_ < 1024 )
-                    port_ += 1024;
-            }
-            else {
-                natpmp_.reset(new natpmp_client);
-                natpmp_->private_port(port_);
-                natpmp_->port_mapping_lifetime(3600);
-                natpmp_->mapped_callback(&server::announcer, this);
-                natpmp_->startup();
-
-                listen_func(sockets_[0]);
-            }
-
-            std::unique_lock<std::mutex> lock(mtx_);
-            cv_.wait_for(lock, std::chrono::seconds(30), [&] { return shutdown_; });
+        }
+        catch( const std::exception & e ) {
+            std::cerr << e << std::endl;
+#if QT_CORE_LIB && __ANDROID__
+            qDebug() << QString::fromStdString(e.what());
+#endif
+            wait(std::chrono::seconds(3));
+        }
+        catch( ... ) {
+            std::cerr << "undefined c++ exception catched" << std::endl;
+#if QT_CORE_LIB && __ANDROID__
+            qDebug() << "undefined c++ exception catched";
+#endif
+            wait(std::chrono::seconds(3));
         }
     }
 }
 //------------------------------------------------------------------------------
 void server::worker(std::shared_ptr<active_socket> socket)
 {
-    socket_stream_buffered ss(*socket);
+    socket_stream ss(socket);
 
     try {
         std::string s;
@@ -133,7 +263,7 @@ void server::worker(std::shared_ptr<active_socket> socket)
     }
     catch( const std::ios_base::failure & e ) {
         std::unique_lock<std::mutex> lock(mtx_);
-        std::qerr << e << std::endl;
+        std::cerr << e << std::endl;
         throw;
     }
 }
@@ -144,8 +274,7 @@ void server::startup()
         return;
 
     shutdown_ = false;
-    thread_.reset(new std::thread(&server::listener, this, nullptr));
-    pool_.reset(new thread_pool_t);
+    thread_.reset(new std::thread(&server::listener, this));
 }
 //------------------------------------------------------------------------------
 void server::shutdown()
@@ -158,12 +287,13 @@ void server::shutdown()
     for( auto s : sockets_ )
         s->interrupt(true).close();
     lock.unlock();
+    cv_.notify_one();
 
     thread_->join();
 
     thread_ = nullptr;
-    pool_ = nullptr;
     natpmp_ = nullptr;
+    announcer_ = nullptr;
     sockets_.clear();
 }
 //------------------------------------------------------------------------------

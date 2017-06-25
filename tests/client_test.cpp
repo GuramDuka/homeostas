@@ -37,14 +37,14 @@ void client_test()
     try {
     }
     catch (const std::exception & e) {
-        std::qerr << e << std::endl;
+        std::cerr << e << std::endl;
         fail = true;
     }
     catch (...) {
         fail = true;
     }
 
-    std::qerr << "client test " << (fail ? "failed" : "passed") << std::endl;
+    std::cerr << "client test " << (fail ? "failed" : "passed") << std::endl;
 }
 //------------------------------------------------------------------------------
 } // namespace tests

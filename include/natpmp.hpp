@@ -41,11 +41,13 @@
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
+constexpr uint16_t NATPMP_PORT = 5351;
+//------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-class natpmp_client {
+class natpmp {
 public:
-    ~natpmp_client() {
+    ~natpmp() {
         shutdown();
     }
 
@@ -68,12 +70,12 @@ public:
 
     template <typename T>
     auto & public_port(const T & port) {
-        public_addr_.port(port);
+        public_port_ = decltype(public_port_) (port);
         return *this;
     }
 
     auto public_port() const {
-        return public_addr_.port();
+        return public_port_;
     }
 
     const auto & public_addr() const {
@@ -90,19 +92,9 @@ public:
         return port_mapping_lifetime_;
     }
 
-    template <class F, class... Args>
-    auto mapped_callback(F&& f, Args&&... args)
-        -> std::future<typename std::result_of<F(Args...)>::type>
-    {
-        using return_type = typename std::result_of<F(Args...)>::type;
-        auto task = std::make_shared<std::packaged_task<return_type()> >(
-            std::bind(std::forward<F>(f), std::forward<Args>(args)...)
-        );
-
-        std::future<return_type> res = task->get_future();
-        mapped_callback_ = [task] { (*task)(); };
-
-        return res;
+    auto & mapped_callback(const std::function<void()> & f) {
+        mapped_callback_ = f;
+        return *this;
     }
 
     const auto & gateway() const {
@@ -124,10 +116,10 @@ protected:
 
 	struct new_port_mapping_request {
         uint8_t  version               = 0;
-        uint8_t  op_code               = 2; 		// OP Code = 1 for UDP or 2 for TCP
+        uint8_t  op_code               = 0; 	// OP Code = 1 for UDP or 2 for TCP
         uint16_t reserved              = 0;		// must be 0
         uint16_t private_port          = 0;
-        uint16_t public_port           = 0;      // requested public port or zero for dynamic allocation
+        uint16_t public_port           = 0;     // requested public port or zero for dynamic allocation
         uint32_t port_mapping_lifetime = 0;		// Requested port mapping lifetime in seconds
 	};
 
@@ -182,6 +174,7 @@ protected:
     std::condition_variable cv_;
 
     uint32_t port_mapping_lifetime_ = 0;
+    uint16_t public_port_           = 0;
     uint16_t private_port_          = 0;
 
     bool shutdown_;

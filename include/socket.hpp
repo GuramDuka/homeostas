@@ -94,6 +94,7 @@
 #include <mutex>
 #include <memory>
 #include <array>
+#include <vector>
 #include <new>
 #include <ios>
 #include <iomanip>
@@ -140,7 +141,7 @@ constexpr size_t RX_MAX_BYTES = 1220;
 // http://en.cppreference.com/w/cpp/thread/hardware_destructive_interference_size
 // portable way to access the L1 data cache line size.
 constexpr size_t MIN_BUFFER_SIZE =
-#if __cplusplus > 201402L
+#if __cplusplus > 201500L
     std::hardware_destructive_interference_size
 #else
     64
@@ -150,6 +151,8 @@ constexpr size_t MIN_BUFFER_SIZE =
 #ifndef INVALID_SOCKET
 constexpr SOCKET INVALID_SOCKET = (SOCKET) -1;
 #endif
+//------------------------------------------------------------------------------
+int get_default_gateway(in_addr * addr);
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
@@ -169,6 +172,61 @@ struct socket_addr {
         sockaddr_in6            saddr6;      // IPv6 address
     };
 
+    // move constructor
+    socket_addr() noexcept {
+        storage.ss_family = AF_UNSPEC;
+    }
+
+    template <class _Elem, class _Traits, class _Alloc>
+    socket_addr(const std::basic_string<_Elem, _Traits, _Alloc> & s);
+
+    // copy constructor
+    socket_addr(const socket_addr & o) noexcept {
+        *this = o;
+    }
+
+    // move constructor
+    socket_addr(socket_addr && o) noexcept {
+        *this = std::move(o);
+    }
+
+    // move assignment operator
+    socket_addr & operator = (socket_addr && o) noexcept {
+        memmove(this, &o, sizeof(o));
+        return *this;
+    }
+
+    // copy assignment operator
+    socket_addr & operator = (const socket_addr & o) noexcept {
+        if( this != &o )
+            memcpy(this, &o, sizeof(o));
+        return *this;
+    }
+
+    bool operator == (const socket_addr & s) const {
+        return compare(s) == 0;
+    }
+
+    bool operator != (const socket_addr & s) const {
+        return compare(s) != 0;
+    }
+
+    bool operator > (const socket_addr & s) const {
+        return compare(s) > 0;
+    }
+
+    bool operator >= (const socket_addr & s) const {
+        return compare(s) >= 0;
+    }
+
+    bool operator < (const socket_addr & s) const {
+        return compare(s) < 0;
+    }
+
+    bool operator <= (const socket_addr & s) const {
+        return compare(s) <= 0;
+    }
+
     const auto & family() const {
         return storage.ss_family;
     }
@@ -179,7 +237,7 @@ struct socket_addr {
         return *this;
     }
 
-    const auto port() const {
+    auto port() const {
         return ntohs(storage.ss_family == AF_INET6 ? saddr6.sin6_port : storage.ss_family == AF_INET ? saddr4.sin_port : 0);
     }
 
@@ -194,17 +252,32 @@ struct socket_addr {
 
     const void * addr_data() const {
         return storage.ss_family == AF_INET ? (const void *) &saddr4.sin_addr :
-            storage.ss_family == AF_INET6 ? (const void *) &saddr6.sin6_addr : nullptr;
+            storage.ss_family == AF_INET6 ? (const void *) &saddr6.sin6_addr :
+                (const uint8_t *) &storage.ss_family + sizeof(storage.ss_family);
     }
 
     void * addr_data() {
         return storage.ss_family == AF_INET ? (void *) &saddr4.sin_addr :
-            storage.ss_family == AF_INET6 ? (void *) &saddr6.sin6_addr : nullptr;
+            storage.ss_family == AF_INET6 ? (void *) &saddr6.sin6_addr :
+                (uint8_t *) &storage.ss_family + sizeof(storage.ss_family);
     }
 
     socklen_t addr_size() const {
         return storage.ss_family == AF_INET ? sizeof(saddr4.sin_addr) :
-            storage.ss_family == AF_INET6 ? sizeof(saddr6.sin6_addr) : 0;
+            storage.ss_family == AF_INET6 ? sizeof(saddr6.sin6_addr) :
+                sizeof(storage) - sizeof(storage.ss_family);
+    }
+
+    const void * data() const {
+        return storage.ss_family == AF_INET ? (const void *) &saddr4 :
+            storage.ss_family == AF_INET6 ? (const void *) &saddr6 :
+                (const void *) &storage;
+    }
+
+    void * data() {
+        return storage.ss_family == AF_INET ? (void *) &saddr4 :
+            storage.ss_family == AF_INET6 ? (void *) &saddr6 :
+                (void *) &storage;
     }
 
     socklen_t size() const {
@@ -212,94 +285,115 @@ struct socket_addr {
             storage.ss_family == AF_INET6 ? sizeof(saddr6) : 0;
     }
 
+    const sockaddr * sock_data() const {
+        return storage.ss_family == AF_INET ? (const sockaddr *) &saddr4 :
+            storage.ss_family == AF_INET6 ? (const sockaddr *) &saddr6 :
+                (const sockaddr *) &storage;
+    }
+
+    sockaddr * sock_data() {
+        return storage.ss_family == AF_INET ? (sockaddr *) &saddr4 :
+            storage.ss_family == AF_INET6 ? (sockaddr *) &saddr6 :
+                (sockaddr *) &storage;
+    }
+
     socket_addr & clear() {
         memset(this, 0, sizeof(*this));
+#if AF_UNSPEC != 0
+        storage.ss_family = AF_UNSPEC;
+#endif
         return *this;
     }
 
-    bool operator == (const socket_addr & s) const {
-        return storage.ss_family == s.storage.ss_family
-            && port() == s.port()
-            && memcmp(addr_data(), s.addr_data(), addr_size()) == 0;
+    int compare(const socket_addr & s) const {
+        return storage.ss_family > s.storage.ss_family ? 1 : storage.ss_family < s.storage.ss_family ? -1
+            : port() > s.port() ? 1 : port() < s.port() ? -1
+                : memcmp(addr_data(), s.addr_data(), addr_size());
     }
 
-    bool operator != (const socket_addr & s) const {
-        return storage.ss_family != s.storage.ss_family
-            || port() == s.port()
-            || memcmp(addr_data(), s.addr_data(), addr_size()) != 0;
+    bool addr_equ(const socket_addr & s) const {
+        return addr_size() == s.addr_size() && memcmp(addr_data(), s.addr_data(), addr_size()) == 0;
     }
 
-    auto & from_string(const std::string & addr) {
-        const char * p_node = addr.c_str(), * p_service = "0";
-        std::string node, service;
-
-        auto p = addr.rfind(':');
-
-        if( p != std::string::npos ) {
-            node = addr.substr(0, p);
-            p_node = node.c_str();
-
-            service = addr.substr(p + 1);
-
-            if( !service.empty() )
-                p_service = service.c_str();
-        }
-
-        addrinfo hints, * result = nullptr;
-
-        memset(&hints, 0, sizeof(addrinfo));
-
-        hints.ai_family     = storage.ss_family;
-        hints.ai_socktype   = 0;
-        hints.ai_flags      = AI_ALL;   // For wildcard IP address
-        hints.ai_protocol   = 0;        // Any protocol
-        hints.ai_canonname  = nullptr;
-        hints.ai_addr       = nullptr;
-        hints.ai_next       = nullptr;
-
-        auto r = getaddrinfo(p_node, p_service, &hints, &result);
-
-        if( r != 0 )
-            throw std::runtime_error(
-#if _WIN32
-#   if QT_CORE_LIB
-                QString::fromWCharArray(gai_strerrorW(r)).toStdString()
-#   else
-                gai_strerrorA(r)
-#   endif
-#else
-                gai_strerror(r)
-#endif
-        );
-
-        if( result != nullptr )
-            memcpy(&storage, result->ai_addr, result->ai_addrlen);
-
-        return *this;
+    bool addr_neq(const socket_addr & s) const {
+        return addr_size() != s.addr_size() || memcmp(addr_data(), s.addr_data(), addr_size()) != 0;
     }
 
-    std::string to_string() const {
-        char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
-        auto r = getnameinfo((const sockaddr *) &storage, sizeof(storage), hbuf, sizeof(hbuf), sbuf,
-                sizeof(sbuf), NI_NUMERICHOST | NI_NUMERICSERV);
+    template <typename T>
+    static auto cidr_ip4(T b0, T b1, T b2, T b3, T l) {
+        return ((u_long(b0) << 24) | (u_long(b1) << 16) | (u_long(b2) << 8) | u_long(b3)) & (~u_long(0) << l);
+    }
 
-        if( r != 0 )
-            throw std::runtime_error(
-#if _WIN32
-#   if QT_CORE_LIB
-                QString::fromWCharArray(gai_strerrorW(r)).toStdString()
-#   else
-                gai_strerrorA(r)
-#   endif
-#else
-                gai_strerror(r)
-#endif
-        );
+    template <typename T>
+    auto is_cidr_ip4(T b0, T b1, T b2, T b3, T l) const {
+        auto m = cidr_ip4(b0, b1, b2, b3, l);
+        return (ntohl(saddr4.sin_addr.s_addr) & m) == m;
+    }
 
-        if( port() != 0 && slen(sbuf) != 0 )
-            return std::string(hbuf) + ":" + std::string(sbuf);
+    bool is_site_local() const {
 
-        return std::string(hbuf);
+        if( storage.ss_family == AF_INET )
+            return
+                is_cidr_ip4(192, 168, 0, 0, 16) ||
+                is_cidr_ip4(172,  16, 0, 0, 20) ||
+                is_cidr_ip4( 10,   0, 0, 0, 24) ||
+                is_cidr_ip4(100,  64, 0, 0, 10);
+
+        if( storage.ss_family == AF_INET6 )
+            return saddr6.sin6_addr.s6_addr[0] == 0xfe && (saddr6.sin6_addr.s6_addr[1] & 0xc0) == 0xc0;
+
+        throw std::xruntime_error("Invalid address family", __FILE__, __LINE__);
+    }
+
+    bool is_link_local() const {
+        if( storage.ss_family == AF_INET )
+            return
+                 is_cidr_ip4(169, 254,   0, 0, 16) &&
+                !is_cidr_ip4(169, 254,   0, 0, 24) &&
+                !is_cidr_ip4(169, 254, 254, 0, 24);
+
+        if( storage.ss_family == AF_INET6 )
+            return saddr6.sin6_addr.s6_addr[0] == 0xfe && (saddr6.sin6_addr.s6_addr[1] & 0xc0) == 0x80;
+
+        throw std::xruntime_error("Invalid address family", __FILE__, __LINE__);
+    }
+
+    bool is_loopback() const {
+
+        if( storage.ss_family == AF_INET )
+            return is_cidr_ip4(127, 0, 0, 0, 24);
+
+        if( storage.ss_family == AF_INET6 )
+            return
+                   saddr6.sin6_addr.s6_addr[ 0] == 0 && saddr6.sin6_addr.s6_addr[ 1] == 0
+                && saddr6.sin6_addr.s6_addr[ 2] == 0 && saddr6.sin6_addr.s6_addr[ 3] == 0
+                && saddr6.sin6_addr.s6_addr[ 4] == 0 && saddr6.sin6_addr.s6_addr[ 5] == 0
+                && saddr6.sin6_addr.s6_addr[ 6] == 0 && saddr6.sin6_addr.s6_addr[ 7] == 0
+                && saddr6.sin6_addr.s6_addr[ 8] == 0 && saddr6.sin6_addr.s6_addr[ 9] == 0
+                && saddr6.sin6_addr.s6_addr[10] == 0 && saddr6.sin6_addr.s6_addr[11] == 0
+                && saddr6.sin6_addr.s6_addr[12] == 0 && saddr6.sin6_addr.s6_addr[13] == 0
+                && saddr6.sin6_addr.s6_addr[14] == 0 && saddr6.sin6_addr.s6_addr[15] == 1;
+
+        throw std::xruntime_error("Invalid address family", __FILE__, __LINE__);
+    }
+
+    bool is_wildcard() const {
+
+        if( storage.ss_family == AF_INET )
+            return is_cidr_ip4(0, 0, 0, 0, 0);
+
+        if( storage.ss_family == AF_INET6 )
+            return
+                   saddr6.sin6_addr.s6_addr[ 0] == 0 && saddr6.sin6_addr.s6_addr[ 1] == 0
+                && saddr6.sin6_addr.s6_addr[ 2] == 0 && saddr6.sin6_addr.s6_addr[ 3] == 0
+                && saddr6.sin6_addr.s6_addr[ 4] == 0 && saddr6.sin6_addr.s6_addr[ 5] == 0
+                && saddr6.sin6_addr.s6_addr[ 6] == 0 && saddr6.sin6_addr.s6_addr[ 7] == 0
+                && saddr6.sin6_addr.s6_addr[ 8] == 0 && saddr6.sin6_addr.s6_addr[ 9] == 0
+                && saddr6.sin6_addr.s6_addr[10] == 0 && saddr6.sin6_addr.s6_addr[11] == 0
+                && saddr6.sin6_addr.s6_addr[12] == 0 && saddr6.sin6_addr.s6_addr[13] == 0
+                && saddr6.sin6_addr.s6_addr[14] == 0 && saddr6.sin6_addr.s6_addr[15] == 0;
+
+        throw std::xruntime_error("Invalid address family", __FILE__, __LINE__);
     }
 
     bool default_gateway(bool no_throw = false) {
@@ -307,472 +401,12 @@ struct socket_addr {
             if( get_default_gateway(&saddr4.sin_addr) == 0 )
                 return true;
 
-        if( !no_throw )
-            throw std::runtime_error("Can't get default gateway");
+        if( no_throw )
+            return false;
 
-        return false;
-    }
-
-    // There is no portable method to get the default route gateway.
-    // So below are four (or five ?) differents functions implementing this.
-    // Parsing /proc/net/route is for linux.
-    // sysctl is the way to access such informations on BSD systems.
-    // Many systems should provide route information through raw PF_ROUTE
-    // sockets.
-    // In MS Windows, default gateway is found by looking into the registry
-    // or by using GetBestRoute().
-
-    static int get_default_gateway(in_addr * addr) {
-#if __linux__
-        // parse /proc/net/route which is as follow :
-
-        //Iface   Destination     Gateway         Flags   RefCnt  Use     Metric  Mask            MTU     Window  IRTT
-        //wlan0   0001A8C0        00000000        0001    0       0       0       00FFFFFF        0       0       0
-        //eth0    0000FEA9        00000000        0001    0       0       0       0000FFFF        0       0       0
-        //wlan0   00000000        0101A8C0        0003    0       0       0       00000000        0       0       0
-        //eth0    00000000        00000000        0001    0       0       1000    00000000        0       0       0
-        //
-        // One header line, and then one line by route by route table entry.
-
-        FILE * f = fopen("/proc/net/route", "r");;
-
-        if( f == nullptr )
-            return -1;
-
-        char buf[256];
-        int line = 0;
-
-        while( fgets(buf, sizeof(buf), f) != nullptr ) {
-            if( line > 0 ) { // skip the first line
-                char * p = buf;
-
-                // skip the interface name
-                while( *p && !isspace(*p) )
-                    p++;
-
-                while( *p && isspace(*p) )
-                    p++;
-
-                unsigned long d, g;
-
-                if( sscanf(p, "%lx%lx", &d, &g) == 2 ) {
-                    if( d == 0 && g != 0 ) { // default
-                        addr->s_addr = g;
-                        fclose(f);
-                        return 0;
-                    }
-                }
-            }
-            line++;
-        }
-        // default route not found
-        if( f != nullptr )
-            fclose(f);
-
-        return -1;
-#elif __APPLE__
-        auto ROUNDUP = [] (auto a) {
-            return ((a) > 0 ? (1 + (((a) - 1) | (sizeof(long) - 1))) : sizeof(long));
-        };
-
-#if 0
-        /* net.route.0.inet.dump.0.0 ? */
-        int mib[] = {CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_DUMP, 0, 0/*tableid*/};
-#endif
-        /* net.route.0.inet.flags.gateway */
-        int mib[] = {CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_GATEWAY};
-        size_t l;
-        char * buf, * p;
-        struct rt_msghdr * rt;
-        struct sockaddr * sa;
-        struct sockaddr * sa_tab[RTAX_MAX];
-        int i;
-        int r = FAILED;
-        if(sysctl(mib, sizeof(mib)/sizeof(int), 0, &l, 0, 0) < 0) {
-            return FAILED;
-        }
-        if(l>0) {
-            buf = malloc(l);
-            if(sysctl(mib, sizeof(mib)/sizeof(int), buf, &l, 0, 0) < 0) {
-                free(buf);
-                return FAILED;
-            }
-            for(p=buf; p<buf+l; p+=rt->rtm_msglen) {
-                rt = (struct rt_msghdr *)p;
-                sa = (struct sockaddr *)(rt + 1);
-                for(i=0; i<RTAX_MAX; i++) {
-                    if(rt->rtm_addrs & (1 << i)) {
-                        sa_tab[i] = sa;
-                        sa = (struct sockaddr *)((char *)sa + ROUNDUP(sa->sa_len));
-                    } else {
-                        sa_tab[i] = NULL;
-                    }
-                }
-                if( ((rt->rtm_addrs & (RTA_DST|RTA_GATEWAY)) == (RTA_DST|RTA_GATEWAY))
-                  && sa_tab[RTAX_DST]->sa_family == AF_INET
-                  && sa_tab[RTAX_GATEWAY]->sa_family == AF_INET) {
-                    if(((struct sockaddr_in *)sa_tab[RTAX_DST])->sin_addr.s_addr == 0) {
-                        *addr = ((struct sockaddr_in *)(sa_tab[RTAX_GATEWAY]))->sin_addr.s_addr;
-                        r = SUCCESS;
-                    }
-                }
-            }
-            free(buf);
-        }
-
-        return r;
-#elif BSD || __FreeBSD_kernel__ || (sun && __SVR4)
-          // Thanks to Darren Kenny for this code
-        auto NEXTADDR = (auto w, auto u) {
-            if (rtm_addrs & w)
-            l = sizeof(struct sockaddr); memmove(cp, &(u), l); cp += l;
-        };
-
-        struct {
-            struct rt_msghdr m_rtm;
-            char       m_space[512];
-        } m_rtmsg;
-
-        int s, seq, l, rtm_addrs, i;
-        pid_t pid;
-        struct sockaddr so_dst, so_mask;
-        char *cp = m_rtmsg.m_space;
-        struct sockaddr *gate = NULL, *sa;
-        struct rt_msghdr *msg_hdr;
-
-        pid = getpid();
-        seq = 0;
-        rtm_addrs = RTA_DST | RTA_NETMASK;
-
-        memset(&so_dst, 0, sizeof(so_dst));
-        memset(&so_mask, 0, sizeof(so_mask));
-        memset(&m_rtmsg.m_rtm, 0, sizeof(struct rt_msghdr));
-
-        m_rtmsg.m_rtm.rtm_type = RTM_GET;
-        m_rtmsg.m_rtm.rtm_flags = RTF_UP | RTF_GATEWAY;
-        m_rtmsg.m_rtm.rtm_version = RTM_VERSION;
-        m_rtmsg.m_rtm.rtm_seq = ++seq;
-        m_rtmsg.m_rtm.rtm_addrs = rtm_addrs;
-
-        so_dst.sa_family = AF_INET;
-        so_mask.sa_family = AF_INET;
-
-        NEXTADDR(RTA_DST, so_dst);
-        NEXTADDR(RTA_NETMASK, so_mask);
-
-        m_rtmsg.m_rtm.rtm_msglen = l = cp - (char *)&m_rtmsg;
-
-        s = socket(PF_ROUTE, SOCK_RAW, 0);
-
-        if (write(s, (char *)&m_rtmsg, l) < 0) {
-            close(s);
-            return FAILED;
-        }
-
-        do {
-            l = read(s, (char *)&m_rtmsg, sizeof(m_rtmsg));
-        } while (l > 0 && (rtm.rtm_seq != seq || rtm.rtm_pid != pid));
-
-        close(s);
-
-        msg_hdr = &rtm;
-
-        cp = ((char *)(msg_hdr + 1));
-
-        if (msg_hdr->rtm_addrs) {
-            for (i = 1; i; i <<= 1)
-                if (i & msg_hdr->rtm_addrs) {
-                    sa = (struct sockaddr *)cp;
-                    if (i == RTA_GATEWAY )
-                        gate = sa;
-
-                    cp += sizeof(struct sockaddr);
-                }
-                else
-                    return FAILED;
-        }
-
-        if( gate != NULL ) {
-            *addr = ((struct sockaddr_in *)gate)->sin_addr.s_addr;
-            return SUCCESS;
-        }
-        return FAILED;
-#elif _WIN32
-            constexpr size_t MAX_KEY_LENGTH = 255;
-            constexpr size_t MAX_VALUE_LENGTH = 16383;
-
-            HKEY networkCardsKey;
-            HKEY networkCardKey;
-            HKEY interfacesKey;
-            HKEY interfaceKey;
-            DWORD i = 0;
-            DWORD numSubKeys = 0;
-            CHAR keyName[MAX_KEY_LENGTH];
-            DWORD keyNameLength = MAX_KEY_LENGTH;
-            CHAR keyValue[MAX_VALUE_LENGTH];
-            DWORD keyValueLength = MAX_VALUE_LENGTH;
-            DWORD keyValueType = REG_SZ;
-            CHAR gatewayValue[MAX_VALUE_LENGTH];
-            DWORD gatewayValueLength = MAX_VALUE_LENGTH;
-            DWORD gatewayValueType = REG_MULTI_SZ;
-            bool done = 0;
-
-            constexpr CONST CHAR networkCardsPath[] = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkCards";
-            constexpr CONST CHAR interfacesPath[] = "SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces";
-            constexpr CONST CHAR STR_SERVICENAME[] = "ServiceName";
-            constexpr CONST CHAR STR_DHCPDEFAULTGATEWAY[] = "DhcpDefaultGateway";
-            constexpr CONST CHAR STR_DEFAULTGATEWAY[] = "DefaultGateway";
-
-            // The windows registry lists its primary network devices in the following location:
-            // HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkCards
-            //
-            // Each network device has its own subfolder, named with an index, with various properties:
-            // -NetworkCards
-            //   -5
-            //     -Description = Broadcom 802.11n Network Adapter
-            //     -ServiceName = {E35A72F8-5065-4097-8DFE-C7790774EE4D}
-            //   -8
-            //     -Description = Marvell Yukon 88E8058 PCI-E Gigabit Ethernet Controller
-            //     -ServiceName = {86226414-5545-4335-A9D1-5BD7120119AD}
-            //
-            // The above service name is the name of a subfolder within:
-            // HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces
-            //
-            // There may be more subfolders in this interfaces path than listed in the network cards path above:
-            // -Interfaces
-            //   -{3a539854-6a70-11db-887c-806e6f6e6963}
-            //     -DhcpIPAddress = 0.0.0.0
-            //     -[more]
-            //   -{E35A72F8-5065-4097-8DFE-C7790774EE4D}
-            //     -DhcpIPAddress = 10.0.1.4
-            //     -DhcpDefaultGateway = 10.0.1.1
-            //     -[more]
-            //   -{86226414-5545-4335-A9D1-5BD7120119AD}
-            //     -DhcpIpAddress = 10.0.1.5
-            //     -DhcpDefaultGateay = 10.0.1.1
-            //     -[more]
-            //
-            // In order to extract this information, we enumerate each network card, and extract the ServiceName value.
-            // This is then used to open the interface subfolder, and attempt to extract a DhcpDefaultGateway value.
-            // Once one is found, we're done.
-            //
-            // It may be possible to simply enumerate the interface folders until we find one with a DhcpDefaultGateway value.
-            // However, the technique used is the technique most cited on the web, and we assume it to be more correct.
-
-            if( RegOpenKeyExA(HKEY_LOCAL_MACHINE,                // Open registry key or predifined key
-                                             networkCardsPath,   // Name of registry subkey to open
-                                             0,                  // Reserved - must be zero
-                                             KEY_READ,           // Mask - desired access rights
-                                             &networkCardsKey)   // Pointer to output key
-                    != ERROR_SUCCESS )
-            {
-                // Unable to open network cards keys
-                return -1;
-            }
-
-            if( RegOpenKeyExA(HKEY_LOCAL_MACHINE,                // Open registry key or predefined key
-                                             interfacesPath,     // Name of registry subkey to open
-                                             0,                  // Reserved - must be zero
-                                             KEY_READ,           // Mask - desired access rights
-                                             &interfacesKey)     // Pointer to output key
-                    != ERROR_SUCCESS )
-            {
-                // Unable to open interfaces key
-                RegCloseKey(networkCardsKey);
-                return -1;
-            }
-
-            // Figure out how many subfolders are within the NetworkCards folder
-            RegQueryInfoKeyA(networkCardsKey, NULL, NULL, NULL, &numSubKeys, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
-
-            //printf( "Number of subkeys: %u\n", (unsigned int)numSubKeys);
-
-            // Enumrate through each subfolder within the NetworkCards folder
-            for( i = 0; i < numSubKeys && !done; i++ ) {
-                keyNameLength = MAX_KEY_LENGTH;
-
-                if( RegEnumKeyExA(networkCardsKey,                // Open registry key
-                                                 i,               // Index of subkey to retrieve
-                                                 keyName,         // Buffer that receives the name of the subkey
-                                                 &keyNameLength,  // Variable that receives the size of the above buffer
-                                                 NULL,            // Reserved - must be NULL
-                                                 NULL,            // Buffer that receives the class string
-                                                 NULL,            // Variable that receives the size of the above buffer
-                                                 NULL)            // Variable that receives the last write time of subkey
-                        == ERROR_SUCCESS )
-                {
-                    if( RegOpenKeyExA(networkCardsKey,  keyName, 0, KEY_READ, &networkCardKey) == ERROR_SUCCESS ) {
-                        keyValueLength = MAX_VALUE_LENGTH;
-
-                        if( RegQueryValueExA(networkCardKey,                  // Open registry key
-                                                            STR_SERVICENAME,  // Name of key to query
-                                                            NULL,             // Reserved - must be NULL
-                                                            &keyValueType,    // Receives value type
-                                                            (LPBYTE)keyValue, // Receives value
-                                                            &keyValueLength)  // Receives value length in bytes
-                                == ERROR_SUCCESS )
-                        {
-        //					printf("keyValue: %s\n", keyValue);
-                            if( RegOpenKeyExA(interfacesKey, keyValue, 0, KEY_READ, &interfaceKey) == ERROR_SUCCESS ) {
-                                gatewayValueLength = MAX_VALUE_LENGTH;
-
-                                if( RegQueryValueExA(interfaceKey,                          // Open registry key
-                                                                    STR_DHCPDEFAULTGATEWAY, // Name of key to query
-                                                                    NULL,                   // Reserved - must be NULL
-                                                                    &gatewayValueType,      // Receives value type
-                                                                    (LPBYTE)gatewayValue,   // Receives value
-                                                                    &gatewayValueLength)    // Receives value length in bytes
-                                        == ERROR_SUCCESS )
-                                {
-                                    // Check to make sure it's a string
-                                    if( (gatewayValueType == REG_MULTI_SZ || gatewayValueType == REG_SZ) && (gatewayValueLength > 1) ) {
-                                        //printf("gatewayValue: %s\n", gatewayValue);
-                                        done = true;
-                                    }
-                                }
-                                else if( RegQueryValueExA(interfaceKey,                     // Open registry key
-                                                                    STR_DEFAULTGATEWAY,     // Name of key to query
-                                                                    NULL,                   // Reserved - must be NULL
-                                                                    &gatewayValueType,      // Receives value type
-                                                                    (LPBYTE)gatewayValue,   // Receives value
-                                                                    &gatewayValueLength)    // Receives value length in bytes
-                                         == ERROR_SUCCESS )
-                                {
-                                    // Check to make sure it's a string
-                                    if( (gatewayValueType == REG_MULTI_SZ || gatewayValueType == REG_SZ) && (gatewayValueLength > 1) ) {
-                                        //printf("gatewayValue: %s\n", gatewayValue);
-                                        done = true;
-                                    }
-                                }
-                                RegCloseKey(interfaceKey);
-                            }
-                        }
-                        RegCloseKey(networkCardKey);
-                    }
-                }
-            }
-
-            RegCloseKey(interfacesKey);
-            RegCloseKey(networkCardsKey);
-
-            if( done ) {
-                addr->S_un.S_addr = inet_addr(gatewayValue);
-                return 0;
-            }
-
-#   if __CYGWIN__ || __MINGW32__
-            return -1;
-#   else
-            MIB_IPFORWARDROW ip_forward;
-            memset(&ip_forward, 0, sizeof(ip_forward));
-
-            if( GetBestRoute(inet_addr("0.0.0.0"), 0, &ip_forward) != NO_ERROR )
-                return -1;
-
-            addr->s_addr = ip_forward.dwForwardNextHop;
-
-            return 0;
-#   endif
-#elif __HAIKU__
-            int fd, ret = -1;
-            struct ifconf config;
-            void *buffer = NULL;
-            struct ifreq *interface;
-
-            if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-                return -1;
-            }
-            if (ioctl(fd, SIOCGRTSIZE, &config, sizeof(config)) != 0) {
-                goto fail;
-            }
-            if (config.ifc_value < 1) {
-                goto fail; /* No routes */
-            }
-            if ((buffer = malloc(config.ifc_value)) == NULL) {
-                goto fail;
-            }
-            config.ifc_len = config.ifc_value;
-            config.ifc_buf = buffer;
-            if (ioctl(fd, SIOCGRTTABLE, &config, sizeof(config)) != 0) {
-                goto fail;
-            }
-            for (interface = buffer;
-              (uint8_t *)interface < (uint8_t *)buffer + config.ifc_len; ) {
-                struct route_entry route = interface->ifr_route;
-                int intfSize;
-                if (route.flags & (RTF_GATEWAY | RTF_DEFAULT)) {
-                    *addr = ((struct sockaddr_in *)route.gateway)->sin_addr.s_addr;
-                    ret = 0;
-                    break;
-                }
-                intfSize = sizeof(route) + IF_NAMESIZE;
-                if (route.destination != NULL) {
-                    intfSize += route.destination->sa_len;
-                }
-                if (route.mask != NULL) {
-                    intfSize += route.mask->sa_len;
-                }
-                if (route.gateway != NULL) {
-                    intfSize += route.gateway->sa_len;
-                }
-                interface = (struct ifreq *)((uint8_t *)interface + intfSize);
-            }
-        fail:
-            free(buffer);
-            close(fd);
-            return ret;
-        }
-#else
-        errno = ENOSYS;
-
-        return -1;
-#endif
+        throw std::xruntime_error("Can't get default gateway", __FILE__, __LINE__);
     }
 };
-//------------------------------------------------------------------------------
-} // namespace homeostas
-//------------------------------------------------------------------------------
-namespace std {
-//------------------------------------------------------------------------------
-inline string to_string(const homeostas::socket_addr & addr) {
-    char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
-    auto r = getnameinfo((const sockaddr *) &addr, socklen_t(sizeof(addr)),
-        hbuf, socklen_t(sizeof(hbuf)),
-        sbuf, socklen_t(sizeof(sbuf)),
-        NI_NUMERICHOST | NI_NUMERICSERV);
-
-    if( r != 0 )
-        return string();
-
-    return string(hbuf) + ":" + sbuf;
-}
-//------------------------------------------------------------------------------
-inline string to_string(const homeostas::socket_addr & addr, bool no_throw) {
-    char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
-    auto r = getnameinfo((const sockaddr *) &addr, socklen_t(sizeof(addr)),
-        hbuf, socklen_t(sizeof(hbuf)),
-        sbuf, socklen_t(sizeof(sbuf)),
-        NI_NUMERICHOST | NI_NUMERICSERV);
-
-    if( r != 0 && !no_throw )
-        throw std::runtime_error(
-#if _WIN32
-#   if QT_CORE_LIB
-            QString::fromWCharArray(gai_strerrorW(r)).toStdString()
-#   else
-            gai_strerrorA(r)
-#   endif
-#else
-            gai_strerror(r)
-#endif
-        );
-
-    return string(hbuf) + ":" + sbuf;
-}
-//------------------------------------------------------------------------------
-} // namespace std
-//------------------------------------------------------------------------------
-namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
@@ -806,6 +440,182 @@ typedef enum {
 //------------------------------------------------------------------------------
 class base_socket {
 public:
+    ~base_socket() noexcept {
+#if _WIN32
+        wizard(0);
+#endif
+    }
+
+    base_socket() noexcept {
+#if _WIN32
+        wizard(1);
+#endif
+    }
+protected:
+private:
+#if _WIN32
+    static void wizard(int what) noexcept {
+        static std::mutex mtx;
+        static WSADATA wsa_data;
+        static std::atomic_uint wsa_count(0);
+        static volatile bool wsa_started = false;
+
+        if( what == 0 && --wsa_count == 0 ) {
+            std::unique_lock<std::mutex> lock(mtx);
+            WSACleanup();
+            wsa_started = false;
+        }
+        else if( what == 1 ) {
+            wsa_count++;
+
+            if( !wsa_started ) {
+                std::unique_lock<std::mutex> lock(mtx);
+
+                if( !wsa_started ) {
+                    memset(&wsa_data, 0, sizeof(wsa_data));
+
+                    if( WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0 ) {
+                        abort();
+                        //wsa_count--;
+                        //throw_translate_socket_error();
+                    }
+
+                    wsa_started = true;
+                }
+            }
+        }
+    }
+#endif
+};
+//------------------------------------------------------------------------------
+} // namespace homeostas
+//------------------------------------------------------------------------------
+namespace std {
+//------------------------------------------------------------------------------
+template <class _Elem, class _Traits, class _Alloc> inline
+homeostas::socket_addr & from_string(homeostas::socket_addr & a, const std::basic_string<_Elem, _Traits, _Alloc> & addr, bool no_throw = false) {
+#if _WIN32
+    homeostas::base_socket dummy;
+#endif
+    const _Elem * p_node = addr.c_str(), * p_service = nullptr;
+    std::string node, service;
+
+    auto p = addr.rfind(_Elem(':'));
+
+    if( p != std::string::npos ) {
+        node = addr.substr(0, p);
+        p_node = node.c_str();
+
+        service = addr.substr(p + 1);
+
+        if( !service.empty() )
+            p_service = service.c_str();
+    }
+
+    addrinfo hints, * result = nullptr;
+
+    memset(&hints, 0, sizeof(addrinfo));
+
+    hints.ai_family     = a.storage.ss_family;
+    hints.ai_socktype   = 0;
+    hints.ai_flags      = AI_ALL;   // For wildcard IP address
+    hints.ai_protocol   = 0;        // Any protocol
+    hints.ai_canonname  = nullptr;
+    hints.ai_addr       = nullptr;
+    hints.ai_next       = nullptr;
+
+    auto r = getaddrinfo(p_node, p_service, &hints, &result);
+
+    if( r != 0 ) {
+        if( no_throw )
+            return a;
+
+        std::string e =
+#if _WIN32
+#   if QT_CORE_LIB
+            QString::fromWCharArray(gai_strerrorW(r)).toStdString()
+#   else
+            gai_strerrorA(r)
+#   endif
+#else
+            gai_strerror(r)
+#endif
+        ;
+
+        e = addr + ", " + e;
+
+        throw std::xruntime_error(e, __FILE__, __LINE__);
+    }
+
+    if( result != nullptr )
+        memcpy(&a.storage, result->ai_addr, result->ai_addrlen);
+
+    return a;
+}
+//------------------------------------------------------------------------------
+template <class _Elem, class _Traits, class _Alloc> inline
+auto from_string(const std::basic_string<_Elem, _Traits, _Alloc> & addr, bool no_throw = false) {
+    homeostas::socket_addr a;
+    from_string(a, addr, no_throw);
+    return a;
+}
+//------------------------------------------------------------------------------
+inline std::string to_string(const homeostas::socket_addr & a, bool no_throw = false) {
+#if _WIN32
+    homeostas::base_socket dummy;
+#endif
+    char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+    auto r = getnameinfo((const sockaddr *) &a.storage, sizeof(a.storage), hbuf, sizeof(hbuf), sbuf,
+            sizeof(sbuf), NI_NUMERICHOST | NI_NUMERICSERV);
+
+    if( r != 0 ) {
+        std::string e =
+#if _WIN32
+#   if QT_CORE_LIB
+            QString::fromWCharArray(gai_strerrorW(r)).toStdString()
+#   else
+            gai_strerrorA(r)
+#   endif
+#else
+            gai_strerror(r)
+#endif
+        ;
+
+        if( no_throw )
+            return e;
+
+        throw std::xruntime_error(e, __FILE__, __LINE__);
+    }
+
+    if( a.port() != 0 && homeostas::slen(sbuf) != 0 )
+        return std::string(hbuf) + ":" + std::string(sbuf);
+
+    return std::string(hbuf);
+}
+//------------------------------------------------------------------------------
+template <class _Elem, class _Traits> inline
+basic_ostream<_Elem, _Traits> & operator << (
+    basic_ostream<_Elem, _Traits> & ss,
+    const homeostas::socket_addr & addr)
+{
+    return ss << to_string(addr);
+}
+//------------------------------------------------------------------------------
+} // namespace std
+//------------------------------------------------------------------------------
+namespace homeostas {
+//------------------------------------------------------------------------------
+template <class _Elem, class _Traits, class _Alloc> inline
+socket_addr::socket_addr(const std::basic_string<_Elem, _Traits, _Alloc> & s)
+{
+    storage.ss_family = AF_UNSPEC;
+    std::from_string(*this, s, true);
+}
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+class basic_socket : public base_socket {
+public:
     typedef enum {
         ShutdownRD      = SHUT_RD,
         ShutdownWR      = SHUT_WR,
@@ -834,29 +644,19 @@ public:
         SocketAddrNotAvail,
         SocketEUnknown             // Unknown error
     } SocketErrors;
-
 public:
-
-    ~base_socket() noexcept {
+    ~basic_socket() noexcept {
         exceptions_ = false;
         close();
-
-#if _WIN32
-        if( --wsa_count_ == 0 ) {
-            std::unique_lock<std::mutex> lock(mtx_);
-            WSACleanup();
-            wsa_started_ = false;
-        }
-#endif
     }
 
     // move constructor
-    base_socket(base_socket && o) noexcept {
+    basic_socket(basic_socket && o) noexcept {
         *this = std::move(o);
     }
 
     // Move assignment operator
-    base_socket & operator = (base_socket && o) noexcept {
+    basic_socket & operator = (basic_socket && o) noexcept {
         if( this != &o ) {
             std::memmove(this, &o, sizeof(o));
             o.socket_ = INVALID_SOCKET;
@@ -864,7 +664,7 @@ public:
         return *this;
     }
 
-    base_socket() noexcept :
+    basic_socket() noexcept :
         socket_(INVALID_SOCKET),
         socket_errno_(SocketInvalid),
         socket_domain_(SocketDomainInvalid),
@@ -875,31 +675,11 @@ public:
         exceptions_(true),
         interrupt_(false)
     {
-#if _WIN32
-        wsa_count_++;
-
-        if( !wsa_started_ ) {
-            std::unique_lock<std::mutex> lock(mtx_);
-
-            if( !wsa_started_ ) {
-                memset(&wsa_data_, 0, sizeof(wsa_data_));
-
-                if( WSAStartup(MAKEWORD(2, 2), &wsa_data_) != 0 ) {
-                    //wsa_count_--;
-                    //throw_translate_socket_error();
-                }
-
-                wsa_started_ = true;
-            }
-        }
-#endif
     }
 
-    base_socket & open(int socket_domain, int socket_type, int socket_protocol) {
+    basic_socket & open(int socket_domain, int socket_type, int socket_protocol) {
         if( valid() )
             close();
-
-        errno = SocketSuccess;
 
         if( (socket_ = ::socket(socket_domain, socket_type, socket_protocol)) == INVALID_SOCKET ) {
             throw_translate_socket_error();
@@ -909,15 +689,16 @@ public:
         socket_domain_  = decltype(socket_domain_) (socket_domain);
         socket_type_    = decltype(socket_type_) (socket_type);
         socket_proto_   = decltype(socket_proto_) (socket_protocol);
+        socket_errno_   = SocketSuccess;
 
         return *this;
     }
 
-    base_socket & open(SocketDomain socket_domain = SocketDomainINET, SocketType socket_type = SocketTypeTCP, SocketProtocol socket_protocol = SocketProtoIP) {
+    basic_socket & open(SocketDomain socket_domain = SocketDomainINET, SocketType socket_type = SocketTypeTCP, SocketProtocol socket_protocol = SocketProtoIP) {
         return open(int(socket_domain), int(socket_type), int(socket_protocol));
     }
 
-    base_socket & close() {
+    basic_socket & close() {
         //std::unique_lock<std::mutex> lock(mtx_);
 
         if( valid() ) {
@@ -942,18 +723,18 @@ public:
         return *this;
     }
 
-    base_socket & shutdown_socket() {
+    basic_socket & shutdown_socket() {
         ::shutdown(socket_, SHUT_RDWR);
         return *this;
     }
 
-    base_socket & shutdown(ShutdownMode how = ShutdownWR) {
+    basic_socket & shutdown(ShutdownMode how = ShutdownWR) {
         if( ::shutdown(socket_, how) == SocketError )
             throw_translate_socket_error();
         return *this;
     }
 
-    bool select(uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
+    bool select(fd_set * p_except_fds, fd_set * p_read_fds, fd_set * p_write_fds, uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
         uint64_t started = p_ellapsed != nullptr ? clock_gettime_ns() : 0;
         struct timeval * p_timeout = nullptr;
         struct timeval   timeout;
@@ -970,16 +751,7 @@ public:
         }
 
         bool r = false;
-        fd_set error_fds, read_fds, write_fds;
-
-        FD_ZERO(&error_fds);
-        FD_SET(socket_, &error_fds);
-        FD_ZERO(&read_fds);
-        FD_SET(socket_, &read_fds);
-        FD_ZERO(&write_fds);
-        FD_SET(socket_, &write_fds);
-
-        int n = ::select(1, &read_fds, &write_fds, &error_fds, p_timeout);
+        int n = ::select(1, p_read_fds, p_write_fds, p_except_fds, p_timeout);
 
         if ( p_ellapsed != nullptr )
             *p_ellapsed = clock_gettime_ns() - started;
@@ -994,12 +766,15 @@ public:
         // If a file descriptor (read/write) is set then check the
         // socket error (SO_ERROR) to see if there is a pending error.
         //----------------------------------------------------------------------
-        else if( FD_ISSET(socket_, &read_fds) || FD_ISSET(socket_, &write_fds) ) {
+        else if( (p_read_fds   != nullptr && FD_ISSET(socket_, p_read_fds)) ||
+                 (p_write_fds  != nullptr && FD_ISSET(socket_, p_write_fds)) ||
+                 (p_except_fds != nullptr && FD_ISSET(socket_, p_except_fds)) ) {
             int err = 0;
             socklen_t l = sizeof(err);
 
             if( getsockopt(socket_, SOL_SOCKET, SO_ERROR, (char *) &err, &l) != 0 ) {
-                throw_translate_socket_error();
+                translate_socket_error(err);
+                throw_socket_error();
             }
             else if( err == 0 ) {
                 socket_errno_ = SocketSuccess;
@@ -1008,6 +783,37 @@ public:
         }
 
         return r;
+    }
+
+    bool select_rd(uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
+        fd_set fds;
+
+        FD_ZERO(&fds);
+        FD_SET(socket_, &fds);
+
+        return select(nullptr, nullptr, &fds, timeout_ns, p_ellapsed);
+    }
+
+    bool select_wr(uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
+        fd_set fds;
+
+        FD_ZERO(&fds);
+        FD_SET(socket_, &fds);
+
+        return select(nullptr, &fds, nullptr, timeout_ns, p_ellapsed);
+    }
+
+    bool select(uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
+        fd_set error_fds, read_fds, write_fds;
+
+        FD_ZERO(&error_fds);
+        FD_SET(socket_, &error_fds);
+        FD_ZERO(&read_fds);
+        FD_SET(socket_, &read_fds);
+        FD_ZERO(&write_fds);
+        FD_SET(socket_, &write_fds);
+
+        return select(&error_fds, &read_fds, &write_fds, timeout_ns, p_ellapsed);
     }
 
     bool valid() const {
@@ -1020,7 +826,8 @@ public:
 
     size_t recv(void * buffer, size_t size = ~size_t(0), size_t max_recv = RX_MAX_BYTES) {
         size_t bytes_received = 0;
-        socklen_t as = is_multicast_ ? sizeof(multicast_group_.sin_addr) : sizeof(local_addr_);
+        socklen_t as = is_multicast_ ? sizeof(multicast_group_.sin_addr) : sizeof(peer_addr_);
+        sockaddr * sa = (sockaddr *) &peer_addr_;
 
         // if size == 0 recv one chunk of any size
 
@@ -1038,8 +845,7 @@ public:
                         r = ::recv(socket_, (char *) buffer, nb, socket_flags_);// MSG_WAITALL
                         break;
                     case SocketTypeUDP  :
-                        r = ::recvfrom(socket_, (char *) buffer, nb, socket_flags_,
-                            (sockaddr *) (is_multicast_ ? &multicast_group_ : local_addr_.addr_data()), &as);
+                        r = ::recvfrom(socket_, (char *) buffer, nb, socket_flags_, sa, &as);
                         break;
                     default:
                         break;
@@ -1062,8 +868,12 @@ public:
             if( size == 0 )
                 break;
 
-            buffer = reinterpret_cast<uint8_t *>(buffer) + r;
             size -= r;
+
+            if( size == 0 )
+                break;
+
+            buffer = reinterpret_cast<uint8_t *>(buffer) + r;
         }
 
         socket_errno_ = SocketSuccess;
@@ -1072,13 +882,13 @@ public:
     }
 
     template <typename T,
-        typename = std::enable_if_t<std::is_base_of<T, std::array<typename T::value_type,
+        typename std::enable_if<std::is_base_of<T, std::array<typename T::value_type,
 #if __GNUG__
             T::_Nm
 #elif _MSC_VER
-            typename T::_Size
+            T::_Size
 #endif
-            >>::value>
+            >>::value>::type * = nullptr
     >
     T recv(size_t size = 0) {
         T buffer;
@@ -1087,10 +897,10 @@ public:
     }
 
     template <typename T,
-        typename = std::enable_if_t<
+        typename std::enable_if<
             std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value ||
             std::is_base_of<T, std::basic_string<typename T::value_type, typename T::traits_type, typename T::allocator_type>>::value
-        >
+        >::type * = nullptr
     >
     T recv(size_t size = ~size_t(0), size_t max_recv = RX_MAX_BYTES) {
         typedef typename T::value_type VT;
@@ -1121,6 +931,7 @@ public:
     size_t send(const void * buf, size_t size, size_t max_send = TX_MAX_BYTES) {
         size_t bytes_sent = 0;
         socklen_t as = is_multicast_ ? sizeof(multicast_group_.sin_addr) : sizeof(remote_addr_);
+        const sockaddr * sa = (const sockaddr *) (is_multicast_ ? &multicast_group_ : &remote_addr_.saddr4);
 
         while( size > 0 ) {
             int nb = int(std::min(size, max_send));
@@ -1132,9 +943,7 @@ public:
                         w = ::send(socket_, (const char *) buf, nb, socket_flags_);
                         break;
                     case SocketTypeUDP  :
-                        w = ::sendto(socket_, (const char *) buf, nb, socket_flags_,
-                            (const sockaddr *) (is_multicast_ ? &multicast_group_ : &remote_addr_.saddr4),
-                            as);
+                        w = ::sendto(socket_, (const char *) buf, nb, socket_flags_, sa, as);
                         break;
                     default :
                         break;
@@ -1166,12 +975,12 @@ public:
     }
 
     template <typename T,
-        typename = std::enable_if_t<
+        typename std::enable_if<
             std::is_base_of<T, std::basic_string<typename T::value_type, typename T::traits_type, typename T::allocator_type>>::value
-        >
+        >::type * = nullptr
     >
     size_t send(const T & s, size_t max_send = TX_MAX_BYTES) {
-        return send(s.data(), s.size() * T::value_type, max_send);
+        return send((const void *) s.c_str(), s.size() * sizeof(T::value_type), max_send);
     }
 
     size_t send(const struct iovec * vec, size_t n) {
@@ -1198,7 +1007,7 @@ public:
         return bytes_sent;
     }
 
-    base_socket & option_linger(bool enable, uint16_t timeout) {
+    basic_socket & option_linger(bool enable, uint16_t timeout) {
         linger l;
         l.l_onoff   = enable ? 1 : 0;
         l.l_linger  = timeout;
@@ -1209,7 +1018,7 @@ public:
         return *this;
     }
 
-    base_socket option_reuse_addr() {
+    basic_socket option_reuse_addr() {
         int32_t nReuse = IPTOS_LOWDELAY;
 
         if( setsockopt(socket_, SOL_SOCKET, SO_REUSEADDR, (char *) &nReuse, sizeof(int32_t)) != 0 )
@@ -1218,7 +1027,7 @@ public:
         return *this;
     }
 
-    base_socket & multicast(uint8_t multicast_ttl) {
+    basic_socket & multicast(uint8_t multicast_ttl) {
         if( socket_type_ == SocketTypeUDP ) {
             if( setsockopt(socket_, IPPROTO_IP, IP_MULTICAST_TTL, (const char *) &multicast_ttl, sizeof(multicast_ttl)) != 0 ) {
                 throw_translate_socket_error();
@@ -1348,6 +1157,10 @@ public:
         return remote_addr_;
     }
 
+    const auto & peer_addr() const {
+        return peer_addr_;
+    }
+
     uint32_t receive_window_size() {
         return window_size(SO_RCVBUF);
     }
@@ -1403,8 +1216,35 @@ public:
         return exceptions_;
     }
 
-    base_socket & exceptions(bool exceptions) {
+    basic_socket & exceptions(bool exceptions) {
         exceptions_ = exceptions;
+        return *this;
+    }
+
+    const auto & domain() const {
+        return socket_domain_;
+    }
+
+    basic_socket & type(SocketDomain domain) {
+        socket_domain_ = domain;
+        return *this;
+    }
+
+    const auto & type() const {
+        return socket_type_;
+    }
+
+    basic_socket & type(SocketType type) {
+        socket_type_ = type;
+        return *this;
+    }
+
+    const auto & proto() const {
+        return socket_proto_;
+    }
+
+    basic_socket & proto(SocketProtocol proto) {
+        socket_proto_ = proto;
         return *this;
     }
 
@@ -1426,12 +1266,12 @@ public:
 
     void throw_socket_error() {
         if( exceptions_ )
-            throw std::runtime_error(str_error(socket_errno_));
+            throw std::xruntime_error(str_error(socket_errno_), __FILE__, __LINE__);
     }
 
     void throw_socket_error(const std::string & msg) {
         if( exceptions_ )
-            throw std::runtime_error(msg);
+            throw std::xruntime_error(msg, __FILE__, __LINE__);
     }
 
     void throw_translate_socket_error() {
@@ -1439,7 +1279,7 @@ public:
         throw_socket_error();
     }
 
-    base_socket & interrupt(bool interrupt) {
+    basic_socket & interrupt(bool interrupt) {
         interrupt_ = interrupt;
         return *this;
     }
@@ -1449,10 +1289,10 @@ public:
     }
 
     template <typename T,
-        typename = std::enable_if_t<
+        typename std::enable_if<
             std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
             std::is_base_of<typename T::value_type, std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>>::value
-        >
+        >::type * = nullptr
     >
     static T wildcards() {
         T container;
@@ -1484,7 +1324,7 @@ public:
             gai_strerror(r)
 #endif
             ;
-            gai_err = gai_err;
+            throw std::xruntime_error(gai_err, __FILE__, __LINE__);
         }
         else {
             at_scope_exit(
@@ -1512,10 +1352,10 @@ public:
     }
 
     template <typename T,
-        typename = std::enable_if_t<
+        typename std::enable_if<
             std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
             std::is_base_of<typename T::value_type, std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>>::value
-        >
+        >::type * = nullptr
     >
     static T interfaces() {
         T container;
@@ -1535,7 +1375,11 @@ public:
             memset(&hints, 0, sizeof(addrinfo));
             hints.ai_family     = AF_UNSPEC;    // Allow IPv4 or IPv6
             hints.ai_socktype   = 0;
-            hints.ai_flags      = AI_ALL;
+            hints.ai_flags      = (AI_ALL | AI_ADDRCONFIG)
+#if AI_MASK
+                & AI_MASK
+#endif
+            ;
             hints.ai_protocol   = 0;            // Any protocol
             hints.ai_canonname  = nullptr;
             hints.ai_addr       = nullptr;
@@ -1543,18 +1387,31 @@ public:
 
             auto r = getaddrinfo(node, "0", &hints, &result);
 
-            if( r == 0 ) {
-                at_scope_exit( freeaddrinfo(result) );
+            if( r != 0 && r != EAI_NODATA ) {
+                auto gai_err =
+#if _WIN32
+#   if QT_CORE_LIB
+                QString::fromWCharArray(gai_strerrorW(r)).toStdString()
+#   else
+                gai_strerrorA(r)
+#   endif
+#else
+                gai_strerror(r)
+#endif
+                ;
+                throw std::xruntime_error(gai_err, __FILE__, __LINE__);
+            }
 
-                for( rp = result; rp != nullptr; rp = rp->ai_next ) {
-                    char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+            at_scope_exit( freeaddrinfo(result) );
 
-                    if( getnameinfo(rp->ai_addr, socklen_t(rp->ai_addrlen),
-                            hbuf, socklen_t(sizeof(hbuf)),
-                            sbuf, socklen_t(sizeof(sbuf)),
-                            NI_NUMERICHOST | NI_NUMERICSERV) == 0 )
-                        container.push_back(hbuf);
-                }
+            for( rp = result; rp != nullptr; rp = rp->ai_next ) {
+                char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+
+                if( getnameinfo(rp->ai_addr, socklen_t(rp->ai_addrlen),
+                        hbuf, socklen_t(sizeof(hbuf)),
+                        sbuf, socklen_t(sizeof(sbuf)),
+                        NI_NUMERICHOST | NI_NUMERICSERV) == 0 )
+                    container.push_back(hbuf);
             }
         }
 
@@ -1683,9 +1540,9 @@ protected:
         }
     }
 
-    SocketErrors translate_socket_error() {
+    SocketErrors translate_socket_error(int err) {
+        switch( err ) {
 #if _WIN32
-        switch( WSAGetLastError() ) {
             case EXIT_SUCCESS:
                 socket_errno_ = SocketSuccess;
                 break;
@@ -1740,9 +1597,7 @@ protected:
             default:
                 socket_errno_ = SocketEUnknown;
                 break;
-        }
 #else
-        switch( errno ) {
             case EXIT_SUCCESS:
                 socket_errno_ = SocketSuccess;
                 break;
@@ -1797,18 +1652,20 @@ protected:
             default:
                 socket_errno_ = SocketEUnknown;
                 break;
-            }
 #endif
+        }
         return socket_errno_;
     }
 
-    static std::mutex mtx_;
-
+    SocketErrors translate_socket_error() {
+        return translate_socket_error(
 #if _WIN32
-    static WSADATA wsa_data_;
-    static std::atomic_uint wsa_count_;
-    static volatile bool wsa_started_;
+            WSAGetLastError()
+#else
+            errno
 #endif
+        );
+    }
 
     template <typename T, typename F>
     static void move(T & t, T & o, F) {
@@ -1817,7 +1674,8 @@ protected:
     }
 
     template <typename T, typename F,
-        typename = std::enable_if_t<std::is_function<F>::value>>
+        typename std::enable_if<std::is_function<F>::value>::type * = nullptr
+    >
     static T & move(T & t, T & o, F f) {
         if( &t != &o ) {
             move(t, o, nullptr);
@@ -1837,24 +1695,25 @@ protected:
     SocketErrors                socket_errno_;      // number of last error
     SocketDomain                socket_domain_;     // socket type AF_INET, AF_INET6
     SocketType                  socket_type_;       // socket type - UDP, TCP or RAW
-    SocketProtocol                 socket_proto_;
+    SocketProtocol              socket_proto_;
     int                         socket_flags_;      // socket flags
     bool                        is_multicast_;      // is the UDP socket multicast;
     bool                        exceptions_;
     bool                        interrupt_;
     socket_addr                 remote_addr_;
     socket_addr                 local_addr_;
+    socket_addr                 peer_addr_;
     sockaddr_in                 multicast_group_;
 private:
-    base_socket(const base_socket & base_socket);
-    void operator = (const base_socket &);
+    basic_socket(const basic_socket & basic_socket);
+    void operator = (const basic_socket &);
 };
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 class passive_socket;
 //------------------------------------------------------------------------------
-class active_socket : public base_socket {
+class active_socket : public basic_socket {
 public:
     friend class passive_socket;
 
@@ -1869,7 +1728,9 @@ public:
     }
 
     active_socket(SocketType socket_type = SocketTypeTCP) {
-        socket_type_ = socket_type;
+        socket_domain_ = SocketDomainUNSPEC;
+        socket_type_   = socket_type;
+        socket_proto_  = SocketProtoIP;
     }
 
     active_socket & connect(const std::string & node, const std::string & service) {
@@ -1884,12 +1745,32 @@ public:
         return connect(node, service.empty() ? nullptr : service.c_str());
     }
 
+    active_socket & connect(const socket_addr & addr) {
+        open(addr.family(), socket_type_, socket_proto_);
+
+        if( invalid() )
+            return *this;
+
+        if( ::connect(socket_, (const sockaddr *) addr.data(), addr.size()) == SocketError ) {
+            throw_translate_socket_error();
+            return *this;
+        }
+
+        socklen_t as = sizeof(local_addr_);
+        getpeername(socket_, (sockaddr *) &remote_addr_, &as);
+        getsockname(socket_, (sockaddr *) &local_addr_, &as);
+
+        interrupt_ = false;
+        socket_errno_ = SocketSuccess;
+
+        return *this;
+    }
+
     active_socket & connect(const char * node, const char * service) {
         addrinfo hints, * result, * rp;
 
         memset(&hints, 0, sizeof(addrinfo));
-        hints.ai_family     = AF_UNSPEC;    // Allow IPv4 or IPv6
-        //hints.ai_socktype   = SOCK_DGRAM;   // Datagram socket
+        hints.ai_family     = socket_domain_; // Allow IPv4 or IPv6
         hints.ai_socktype   = socket_type_;
         hints.ai_flags      = AI_ALL;
         hints.ai_protocol   = socket_proto_;
@@ -1944,12 +1825,9 @@ public:
 
             open(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 
-            if( valid() ) {
-                memcpy(&remote_addr_, rp->ai_addr, rp->ai_addrlen);
-
-                if( ::connect(socket_, (sockaddr *) &remote_addr_, sizeof(remote_addr_)) != SocketError )
+            if( valid() )
+                if( ::connect(socket_, rp->ai_addr, socklen_t(rp->ai_addrlen)) != SocketError )
                     break;
-            }
 
             if( rp->ai_next == nullptr ) {
                 throw_translate_socket_error();
@@ -1963,8 +1841,9 @@ public:
             return *this;
         }
 
-        socklen_t as = sizeof(local_addr_);
+        socklen_t as = sizeof(remote_addr_);
         getpeername(socket_, (sockaddr *) &remote_addr_, &as);
+        as = sizeof(local_addr_);
         getsockname(socket_, (sockaddr *) &local_addr_, &as);
 
         interrupt_ = false;
@@ -1979,13 +1858,13 @@ public:
     }
 protected:
 private:
-    active_socket(const active_socket & base_socket);
+    active_socket(const active_socket & basic_socket);
     void operator = (const active_socket &);
 };
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-class passive_socket : public base_socket {
+class passive_socket : public basic_socket {
 public:
     // move constructor
     passive_socket(passive_socket && o) noexcept {
@@ -1998,7 +1877,9 @@ public:
     }
 
     passive_socket(SocketType socket_type = SocketTypeTCP) {
-        socket_type_ = socket_type;
+        socket_domain_ = SocketDomainUNSPEC;
+        socket_type_   = socket_type;
+        socket_proto_  = SocketProtoIP;
     }
 
     bool bind_multicast(const char * pInterface, const char * pGroup, uint16_t nPort) {
@@ -2035,7 +1916,7 @@ public:
         //--------------------------------------------------------------------------
         // Bind to the specified port
         //--------------------------------------------------------------------------
-        if( ::bind(socket_, (struct sockaddr *) &multicast_group_, sizeof(multicast_group_)) == 0 ) {
+        if( ::bind(socket_, (const sockaddr *) &multicast_group_, sizeof(multicast_group_)) == 0 ) {
             //----------------------------------------------------------------------
             // Join the multicast group
             //----------------------------------------------------------------------
@@ -2069,10 +1950,9 @@ public:
         addrinfo hints, * result, * rp;
 
         memset(&hints, 0, sizeof(addrinfo));
-        hints.ai_family     = AF_UNSPEC;    // Allow IPv4 or IPv6
-        //hints.ai_socktype   = SOCK_DGRAM;   // Datagram socket
+        hints.ai_family     = socket_domain_; // Allow IPv4 or IPv6
         hints.ai_socktype   = socket_type_;
-        hints.ai_flags      = AI_PASSIVE;   // For wildcard IP address
+        hints.ai_flags      = AI_PASSIVE;     // For wildcard IP address
         hints.ai_protocol   = socket_proto_;
         hints.ai_canonname  = nullptr;
         hints.ai_addr       = nullptr;
@@ -2133,9 +2013,7 @@ public:
                 setsockopt(socket_, IPPROTO_TCP, IP_TOS, (const char *) &low, sizeof(low));
 #endif
 
-                memcpy(&local_addr_, rp->ai_addr, rp->ai_addrlen);
-
-                if( ::bind(socket_, (sockaddr *) &local_addr_, sizeof(local_addr_)) != SocketError )
+                if( ::bind(socket_, (const sockaddr *) rp->ai_addr, socklen_t(rp->ai_addrlen)) != SocketError )
                     break;
             }
 
@@ -2157,6 +2035,49 @@ public:
                 return *this;
             }
 
+        socklen_t as = sizeof(local_addr_);
+        getsockname(socket_, (sockaddr *) &local_addr_, &as);
+
+        interrupt_ = false;
+        socket_errno_ = SocketSuccess;
+
+        return *this;
+    }
+
+    passive_socket & listen(const socket_addr & addr, int backlog = 0) {
+        open(addr.family(), socket_type_, socket_proto_);
+
+        if( invalid() )
+            return *this;
+#ifndef _WIN32
+        //--------------------------------------------------------------------------
+        // Set the following socket option SO_REUSEADDR.  This will allow the file
+        // descriptor to be reused immediately after the socket is closed instead
+        // of setting in a TIMED_WAIT state.
+        //--------------------------------------------------------------------------
+        int32_t reuse = 1;
+        setsockopt(socket_, SOL_SOCKET, SO_REUSEADDR, (const char *) &reuse, sizeof(reuse));
+#ifdef SO_REUSEPORT
+        setsockopt(socket_, SOL_SOCKET, SO_REUSEPORT, (const char *) &reuse, sizeof(reuse));
+#endif
+        int32_t low = IPTOS_LOWDELAY;
+        setsockopt(socket_, IPPROTO_TCP, IP_TOS, (const char *) &low, sizeof(low));
+#endif
+
+        if( ::bind(socket_, (const sockaddr *) addr.data(), addr.size()) == SocketError ) {
+            throw_translate_socket_error();
+            return *this;
+        }
+
+        if( socket_type_ == SocketTypeTCP )
+            if( ::listen(socket_, int(backlog)) == SocketError ) {
+                throw_translate_socket_error();
+                return *this;
+            }
+
+        socklen_t as = sizeof(local_addr_);
+        getsockname(socket_, (sockaddr *) &local_addr_, &as);
+
         interrupt_ = false;
         socket_errno_ = SocketSuccess;
 
@@ -2175,12 +2096,11 @@ public:
         exceptions_ = false;
 
         std::unique_ptr<active_socket> client_socket(new active_socket);
-        socklen_t as = sizeof(remote_addr_);
 
         while( !interrupt_ ) {
-            select();
-
-            SOCKET socket = ::accept(socket_, (sockaddr *) &remote_addr_, &as);
+            select_rd();
+            socklen_t as = remote_addr_.size();
+            SOCKET socket = ::accept(socket_, (sockaddr *) remote_addr_.data(), &as);
 
             if( socket != INVALID_SOCKET ) {
                 client_socket->socket_          = socket;
@@ -2188,14 +2108,16 @@ public:
                 client_socket->socket_domain_   = socket_domain_;
                 client_socket->socket_type_     = socket_type_;
 
+                as = sizeof(remote_addr_);
                 getpeername(socket, (sockaddr *) &client_socket->remote_addr_, &as);
+                as = sizeof(local_addr_);
                 getsockname(socket, (sockaddr *) &client_socket->local_addr_, &as);
                 break;
             }
 
             if( translate_socket_error() != SocketInterrupted ) {
                 if( !interrupt_ && exceptions_safe )
-                    throw std::runtime_error(str_error());
+                    throw std::xruntime_error(str_error(), __FILE__, __LINE__);
                 return nullptr;
             }
         }
@@ -2209,7 +2131,7 @@ public:
     }
 protected:
 private:
-    passive_socket(const passive_socket & base_socket);
+    passive_socket(const passive_socket & basic_socket);
     void operator = (const passive_socket &);
 };
 //------------------------------------------------------------------------------
@@ -2240,7 +2162,9 @@ public:
         overflow(traits_type::eof()); // flush write buffer
     }
 
-    basic_socket_streambuf(base_socket & socket) : socket_(&socket) {
+    basic_socket_streambuf(basic_socket & socket) : basic_socket_streambuf(&socket) {}
+
+    basic_socket_streambuf(basic_socket * socket) : socket_(socket) {
         setg(gbuf_.data(), gbuf_.data() + gbuf_.size(), gbuf_.data() + gbuf_.size());
         setp(pbuf_.data(), pbuf_.data() + pbuf_.size());
     }
@@ -2372,7 +2296,7 @@ protected:
         return 0;
     }
 
-    base_socket * socket_;
+    basic_socket * socket_;
 
     std::array<char_type, RX_MAX_BYTES / sizeof(char_type)> gbuf_;
     std::array<char_type, TX_MAX_BYTES / sizeof(char_type)> pbuf_;
@@ -2388,6 +2312,8 @@ public:
 #if __GNUG__
     using typename std::basic_istream<_Elem, _Traits>::__istream_type;
     using typename __istream_type::__streambuf_type;
+    using typename __istream_type::traits_type;
+    using typename __istream_type::int_type;
 
     using __istream_type::exceptions;
     using __istream_type::unsetf;
@@ -2408,54 +2334,95 @@ public:
         unsetf(std::ios::unitbuf);
     }
 
-    /*template <typename T,
-        typename = std::enable_if_t<
-            std::is_base_of<T, std::basic_string<typename T::value_type, typename T::traits_type, typename T::allocator_type>>::value &&
-            std::is_same<typename T::value_type, _Elem>::value &&
-            std::is_same<typename T::traits_type, _Traits>::value
-        >
-    >
-    auto & operator >> (T & s) {
-        // extract a null-terminated string
-        for(;;) {
-            auto c = rdbuf()->sbumpc();
-
-            if( c == _Traits::eof() ) {
-                setstate(std::ios::eofbit);
-                break;
-            }
-
-            if( c == _Elem('\0') )
-                break;
-
-            s.push_back(_Elem(c));
-        }
-
+    auto & delimiter(const int_type & t) {
+        delimiter_.clear();
+        delimiter_.push_back(t);
         return *this;
-    }*/
+    }
 
-    //typedef std::basic_istream<_Elem, _Traits> & (* __func_manipul_type)(std::basic_istream<_Elem, _Traits> &);
+    template <class _Alloc>
+    auto & delimiter(const std::basic_string<_Elem, _Traits, _Alloc> & t) {
+        delimiter_.clear();
+        for( const auto & c : t )
+            delimiter_.push_back(traits_type::to_int_type(t));
+        return *this;
+    }
 
-    //basic_socket_istream<_Elem, _Traits> & operator >> (__func_manipul_type f) {
+    auto & delimiter(const _Elem * t) {
+        delimiter_.clear();
+        while( *t != _Elem() ) {
+            delimiter_.push_back(traits_type::to_int_type(*t));
+            t++;
+        }
+        return *this;
+    }
 
-    //template <typename T,
-    //    typename = std::enable_if_t<
-    //        std::is_base_of<T, std::basic_istream<_Elem, _Traits>>::value
-    //    >
-    //>
-    //basic_socket_istream<_Elem, _Traits> & operator >> (T & (* f)(T &)) {
-    //    (*f) (*this);
-    //    return *this;
-    //}
+    const auto & delimiter() const {
+        return delimiter_;
+    }
+protected:
+    std::vector<int_type> delimiter_;
 };
 //------------------------------------------------------------------------------
+} // namespace homeostas
+//------------------------------------------------------------------------------
+namespace std {
+//------------------------------------------------------------------------------
 template <class _Elem, class _Traits, class _Alloc> inline
-std::basic_istream<_Elem, _Traits> & operator >> (
-    basic_socket_istream<_Elem, _Traits> & ss,
-    std::basic_string<_Elem, _Traits, _Alloc> & s)
+homeostas::basic_socket_istream<_Elem, _Traits> & getline(
+    homeostas::basic_socket_istream<_Elem, _Traits> & ss,
+    basic_string<_Elem, _Traits, _Alloc> & s,
+    const _Elem d)
 {
-    return std::getline(*static_cast<std::basic_istream<_Elem, _Traits> *>(&ss), s, _Elem());
+    getline(*static_cast<basic_istream<_Elem, _Traits> *>(&ss), s, d);
+    return ss;
 }
+//------------------------------------------------------------------------------
+template <class _Elem, class _Traits, class _Alloc> inline
+homeostas::basic_socket_istream<_Elem, _Traits> & operator >> (
+    homeostas::basic_socket_istream<_Elem, _Traits> & ss,
+    basic_string<_Elem, _Traits, _Alloc> & s)
+{
+    const auto & delimiter = ss.delimiter();
+    const auto b = delimiter.begin(), e = delimiter.end();
+
+    getline(ss, s, _Elem(*b));
+
+    auto i = b + 1;
+
+    while( i != e && ss ) {
+        auto c = ss.get();
+
+        if( c == _Traits::eof() )
+            break;
+
+        if( _Elem(c) != *i ) {
+            s.push_back(_Elem(c));
+            basic_string<_Elem, _Traits, _Alloc> t;
+            getline(ss, t, _Elem(*(i = b)));
+            s += t;
+        }
+
+        i++;
+    }
+
+    return ss;
+}
+//------------------------------------------------------------------------------
+template <class _Elem, class _Traits, class _Alloc> inline
+homeostas::basic_socket_istream<_Elem, _Traits> & operator >> (
+    homeostas::basic_socket_istream<_Elem, _Traits> & ss,
+    basic_ostringstream<_Elem, _Traits, _Alloc> & s)
+{
+    basic_string<_Elem, _Traits, _Alloc> t;
+    ss >> t;
+    s << t;
+    return ss;
+}
+//------------------------------------------------------------------------------
+} // namespace std
+//------------------------------------------------------------------------------
+namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
@@ -2465,6 +2432,8 @@ public:
 #if __GNUG__
     using typename std::basic_ostream<_Elem, _Traits>::__ostream_type;
     using typename __ostream_type::__streambuf_type;
+    using typename __ostream_type::traits_type;
+    using typename __ostream_type::int_type;
 
     using __ostream_type::exceptions;
     using __ostream_type::unsetf;
@@ -2511,49 +2480,135 @@ public:
     //    (*f) (*this);
     //    return *this;
     //}
+
+    basic_socket_ostream<_Elem, _Traits> & write(const _Elem * s) {
+        static_cast<std::basic_ostream<_Elem, _Traits> *>(this)->write(s, slen(s));
+        return *this;
+    }
+
+    template <class _Alloc> inline
+    basic_socket_ostream<_Elem, _Traits> & write(const std::basic_string<_Elem, _Traits, _Alloc> & s) {
+        static_cast<std::basic_ostream<_Elem, _Traits> *>(this)->write(s.c_str(), s.size());
+        return *this;
+    }
+
+    auto & noends() {
+        ends_.clear();
+        return *this;
+    }
+
+    auto & ends(const int_type & t) {
+        ends_.clear();
+        ends_.push_back(traits_type::to_int_type(t));
+        return *this;
+    }
+
+    template <class _Alloc>
+    auto & ends(const std::basic_string<_Elem, _Traits, _Alloc> & t) {
+        ends_.clear();
+        for( const auto & c : t )
+            ends_.push_back(traits_type::to_int_type(_Elem()));
+        return *this;
+    }
+
+    const auto & ends() const {
+        return ends_;
+    }
+
+protected:
+    std::vector<int_type> ends_;
+
+    //enum StringTxType {
+    //    StringTxNull     = 1,
+    //    StringTxCRLF     = 2,
+    //    StringTxLF       = 3,
+    //    StringTxCR       = 4,
+    //    StringTxCustom   = 5,
+    //};
 };
 //------------------------------------------------------------------------------
+} // namespace homeostas
+//------------------------------------------------------------------------------
+namespace std {
+//------------------------------------------------------------------------------
 template <class _Elem, class _Traits, class _Alloc> inline
-std::basic_ostream<_Elem, _Traits> & operator << (
-    basic_socket_ostream<_Elem, _Traits> & ss,
-    const std::basic_string<_Elem, _Traits, _Alloc> & s)
+homeostas::basic_socket_ostream<_Elem, _Traits> & operator << (
+    homeostas::basic_socket_ostream<_Elem, _Traits> & ss,
+    const basic_string<_Elem, _Traits, _Alloc> & s)
 {
-    return *static_cast<std::basic_ostream<_Elem, _Traits> *>(&ss) << s << std::ends;
+    auto & bos = *static_cast<basic_ostream<_Elem, _Traits> *>(&ss);
+
+    bos << s;
+
+    for( const auto & c : ss.ends() )
+        bos << _Traits::to_char_type(c);
+
+    return ss;
 }
+//------------------------------------------------------------------------------
+template <class _Elem, class _Traits, class _Alloc> inline
+homeostas::basic_socket_ostream<_Elem, _Traits> & operator << (
+    homeostas::basic_socket_ostream<_Elem, _Traits> & ss,
+    const basic_ostringstream<_Elem, _Traits, _Alloc> & s)
+{
+    auto & bos = *static_cast<basic_ostream<_Elem, _Traits> *>(&ss);
+
+    bos << s.str();
+
+    for( const auto & c : ss.ends() )
+        bos << _Traits::to_char_type(c);
+
+    return ss;
+}
+//------------------------------------------------------------------------------
+} // namespace std
+//------------------------------------------------------------------------------
+namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 template <class _Elem, class _Traits>
 class basic_socket_stream :
-    public basic_socket_istream<_Elem, _Traits>,
-    public basic_socket_ostream<_Elem, _Traits>
-{
-public:
-    basic_socket_stream(basic_socket_streambuf<_Elem, _Traits> * sbuf) :
-        basic_socket_istream<_Elem, _Traits>(sbuf),
-        basic_socket_ostream<_Elem, _Traits>(sbuf) {
-    }
-};
-//------------------------------------------------------------------------------
-typedef basic_socket_stream<char, std::char_traits<char>> socket_stream;
-//------------------------------------------------------------------------------
-////////////////////////////////////////////////////////////////////////////////
-//------------------------------------------------------------------------------
-template <class _Elem, class _Traits>
-class basic_socket_stream_buffered :
     public basic_socket_streambuf<_Elem, _Traits>,
     public basic_socket_istream<_Elem, _Traits>,
     public basic_socket_ostream<_Elem, _Traits>
 {
 public:
-    basic_socket_stream_buffered(base_socket & socket) :
+    typedef _Traits traits_type;
+
+    template <typename T,
+        typename = std::enable_if_t<
+            std::is_base_of<T, std::unique_ptr<typename T::element_type, typename T::deleter_type>>::value
+        >
+    >
+    basic_socket_stream(T & socket) : basic_socket_stream(*socket) {}
+
+    template <typename T,
+        typename = std::enable_if_t<
+            std::is_base_of<T, std::shared_ptr<typename T::element_type>>::value
+        >
+    >
+    basic_socket_stream(T socket) : basic_socket_stream(*socket) {}
+
+    basic_socket_stream(basic_socket & socket) : basic_socket_stream(&socket) {}
+
+    basic_socket_stream(basic_socket * socket) :
         basic_socket_streambuf<_Elem, _Traits>(socket),
         basic_socket_istream<_Elem, _Traits>(this),
         basic_socket_ostream<_Elem, _Traits>(this) {
     }
+
+    auto exceptions() const {
+        return basic_socket_istream<_Elem, _Traits>::exceptions();
+    }
+
+    void exceptions(std::ios_base::iostate except) {
+        basic_socket_istream<_Elem, _Traits>::exceptions(except);
+        basic_socket_ostream<_Elem, _Traits>::exceptions(except);
+    }
 };
 //------------------------------------------------------------------------------
-typedef basic_socket_stream_buffered<char, std::char_traits<char>> socket_stream_buffered;
+typedef basic_socket_stream<char, std::char_traits<char>> socket_stream;
 //------------------------------------------------------------------------------
 namespace tests {
 //------------------------------------------------------------------------------

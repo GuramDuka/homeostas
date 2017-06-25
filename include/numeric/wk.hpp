@@ -69,14 +69,14 @@ struct cdc256 {
 
 	void init() {
 		static const data init_value = {
-			UINT64_C(0xA640524A5B44F1FC),
-			UINT64_C(0xC535059705F0BB7E),
-			UINT64_C(0xC8ED76CF6B6EA626),
-			UINT64_C(0x531D1E8E254EA59E),
-			UINT64_C(0x8C0FE7F3E46E2A80),
-			UINT64_C(0x1C53F41FD1E3A7F8),
-			UINT64_C(0x08D4DEAAA1C33335),
-			UINT64_C(0x4C592980FBE9B011)
+            uint64_t(0xA640524A5B44F1FC),
+            uint64_t(0xC535059705F0BB7E),
+            uint64_t(0xC8ED76CF6B6EA626),
+            uint64_t(0x531D1E8E254EA59E),
+            uint64_t(0x8C0FE7F3E46E2A80),
+            uint64_t(0x1C53F41FD1E3A7F8),
+            uint64_t(0x08D4DEAAA1C33335),
+            uint64_t(0x4C592980FBE9B011)
 		};
 		data_ = init_value;
 		position_ = 0;
@@ -169,22 +169,22 @@ struct cdc512 {
 
 	void init() {
 		static const data init_value = {
-			UINT64_C(0xA640524A5B44F1FC),
-			UINT64_C(0xC535059705F0BB7E),
-			UINT64_C(0xC8ED76CF6B6EA626),
-			UINT64_C(0x531D1E8E254EA59E),
-			UINT64_C(0x8C0FE7F3E46E2A80),
-			UINT64_C(0x1C53F41FD1E3A7F8),
-			UINT64_C(0x08D4DEAAA1C33335),
-			UINT64_C(0x4C592980FBE9B011),
-			UINT64_C(0x992E367BE6F0EA1E),
-			UINT64_C(0x71DCF41FFACC283F),
-			UINT64_C(0xC9581F48D85ABD75),
-			UINT64_C(0xE4B93335FF1CE990),
-			UINT64_C(0xE51D6424EFEC1E01),
-			UINT64_C(0x353867A0E66C2A39),
-			UINT64_C(0xA8DBF7B782226B67),
-			UINT64_C(0x9F8B7F0DC254488E)
+            uint64_t(0xA640524A5B44F1FC),
+            uint64_t(0xC535059705F0BB7E),
+            uint64_t(0xC8ED76CF6B6EA626),
+            uint64_t(0x531D1E8E254EA59E),
+            uint64_t(0x8C0FE7F3E46E2A80),
+            uint64_t(0x1C53F41FD1E3A7F8),
+            uint64_t(0x08D4DEAAA1C33335),
+            uint64_t(0x4C592980FBE9B011),
+            uint64_t(0x992E367BE6F0EA1E),
+            uint64_t(0x71DCF41FFACC283F),
+            uint64_t(0xC9581F48D85ABD75),
+            uint64_t(0xE4B93335FF1CE990),
+            uint64_t(0xE51D6424EFEC1E01),
+            uint64_t(0x353867A0E66C2A39),
+            uint64_t(0xA8DBF7B782226B67),
+            uint64_t(0x9F8B7F0DC254488E)
 		};
 		data_ = init_value;
 		position_ = 0;

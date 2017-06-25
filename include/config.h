@@ -387,14 +387,19 @@ static __inline__ uint64_t le64dec(const void *pp)
 //------------------------------------------------------------------------------
 #if __cplusplus
 //------------------------------------------------------------------------------
+// On Android for armeabi-v7a GCC 4.9:  __cplusplus == 201300L
+//------------------------------------------------------------------------------
+#if (defined(_MSC_VER) && _MSC_VER < 1900) || (!defined(_MSC_VER) && __cplusplus < 201300L)
+#   error This code needs at least a C++14 compliant compiler
+#endif
+//------------------------------------------------------------------------------
+#if __GNUG__
+#   include <stddef.h>
+#endif
 #include <ctime>
 #include <climits>
 #include <cinttypes>
 #include <cstdint>
-//------------------------------------------------------------------------------
-#if __GNUC__ > 0 && __GNUC__ < 5
-#define UINT64_C(x) (x ## ULL)
-#endif
 //------------------------------------------------------------------------------
 namespace homeostas {
 struct leave_uninitialized_type {};

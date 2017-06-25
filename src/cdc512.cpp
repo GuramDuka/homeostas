@@ -31,7 +31,6 @@
 #include "numeric/ii.hpp"
 #include "cdc512.hpp"
 #include "rand.hpp"
-#include "rand.hpp"
 #include "port.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
@@ -205,7 +204,7 @@ void cdc512::from_short_string(const std::string & s, const char * abc)
         m *= l;
     }
 
-    memcpy(digest, a.data(), nn::imin(a.size(), sizeof(digest)));
+    memcpy(digest, a.data(), std::min(a.size(), sizeof(digest)));
 }
 //---------------------------------------------------------------------------
 void cdc512::generate_fast_entropy()

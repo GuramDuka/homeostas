@@ -37,7 +37,7 @@ void cdc512_test()
 
 	try {
 #ifndef NDEBUG
-        std::qerr << cdc512::generate_prime() << std::endl;
+        //std::cerr << cdc512::generate_prime() << std::endl;
 #endif
 		uint8_t t[240] = { 0 };
 
@@ -61,10 +61,10 @@ void cdc512_test()
         //std::qerr << (s = ctx2.to_string()) << std::endl;
 		
         if( ctx1.to_string() != "8F0A-7D38-2EE0-C97C-C037-2EFF-B6ED-6040-FE33-FD1E-F0B4-0D6D-BDCF-22B3-5315-C1EA-9287-B14F-861F-8DBF-577C-94EA-3AF6-AEC2-3796-CCE7-A544-36D2-AFE0-E838-F713-1E44" )
-			throw std::runtime_error("bad cdc512 implementation");
+            throw std::xruntime_error("bad cdc512 implementation", __FILE__, __LINE__);
 
         if( ctx2.to_string() != "F949-444B-1638-C935-595B-23F2-4BB3-6BD7-5410-0260-AA14-A09F-236B-AEDE-0527-1DE6-F059-FB91-848F-548C-B731-7700-84C2-EAE0-8FF0-B39D-B967-FA24-903E-762A-2EB0-8286" )
-			throw std::runtime_error("bad cdc512 implementation");
+            throw std::xruntime_error("bad cdc512 implementation", __FILE__, __LINE__);
 
         ctx1.generate_entropy();
         const auto s1 = ctx1.to_short_string("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", '-', 9);
@@ -72,18 +72,18 @@ void cdc512_test()
         const auto s2 = ctx2.to_short_string("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", '-', 9);
 
         if( s1 != s2 )
-            throw std::runtime_error("bad cdc512 implementation");
+            throw std::xruntime_error("bad cdc512 implementation", __FILE__, __LINE__);
 
 	}
     catch (const std::exception & e) {
-        std::qerr << e << std::endl;
+        std::cerr << e << std::endl;
         fail = true;
     }
     catch (...) {
 		fail = true;
 	}
 
-    std::qerr << "cdc512 test " << (fail ? "failed" : "passed") << std::endl;
+    std::cerr << "cdc512 test " << (fail ? "failed" : "passed") << std::endl;
 }
 //------------------------------------------------------------------------------
 } // namespace tests

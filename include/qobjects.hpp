@@ -42,297 +42,131 @@
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-class HomeostasConfiguration : public QObject {
-        Q_OBJECT
-    public:
-        explicit HomeostasConfiguration(QObject *parent = nullptr) : QObject(parent) {
-            Q_ASSERT( singleton_ == nullptr );
-            singleton_ = this;
-            connect_db();
-        }
-
-        static HomeostasConfiguration & singleton() {
-            return *singleton_;
-        }
-
-        void setVar(const char * varName, const QVariant & val);
-
-        void setVar(const char * varName, const char * val) {
-            setVar(varName, QVariant(QString::fromUtf8(val)));
-        }
-
-        template <typename T>
-        void setVar(const std::string & varName, const T & val) {
-            setVar(varName.c_str(), QVariant::fromValue(val));
-        }
-
-        template <typename T>
-        void setVar(const QString & varName, const T & val) {
-            setVar(varName.toStdString().c_str(), QVariant::fromValue(val));
-        }
-
-        QVariant getVar(const char * varName, const QVariant * p_defVal = nullptr);
-
-        QVariant getVar(const std::string & varName, const QVariant * p_defVal = nullptr) {
-            return getVar(varName.c_str(), p_defVal);
-        }
-
-        QVariant getVar(const QString & varName, const QVariant * p_defVal = nullptr) {
-            return getVar(varName.toStdString().c_str(), p_defVal);
-        }
-
-        QVariant getVar(const char * varName, const QVariant & defVal) {
-            return getVar(varName, &defVal);
-        }
-
-        QVariant getVar(const std::string & varName, const QVariant & defVal) {
-            return getVar(varName.c_str(), &defVal);
-        }
-
-        struct QStringHash {
-            size_t operator () (const QString & val) const {
-                size_t h = 0;
-
-                for( const auto & c : val ) {
-                    h += c.unicode();
-                    h += h << 9;
-                    h ^= h >> 5;
-                }
-
-                h += h << 3;
-                h ^= h >> 10;
-                h += h << 14;
-
-                return h;
-           }
-        };
-
-        struct QStringEqual {
-           bool operator () (const QString & val1, const QString & val2) const {
-              return val1.compare(val2, Qt::CaseSensitive) == 0;
-           }
-        };
-
-        struct var_node {
-            uint64_t id;
-            QString name;
-            QVariant value;
-
-            typedef std::unordered_map<QString, var_node, QStringHash, QStringEqual> childs_type;
-            std::unique_ptr<childs_type> childs;
-
-            var_node() {}
-
-            var_node(uint64_t v_id, const QString & v_name, const QVariant & v_value) :
-                id(v_id),
-                name(v_name),
-                value(v_value) {}
-
-            auto & operator [] (const char * name) {
-                return childs->at(QString::fromUtf8(name));
-            }
-
-            const auto & operator [] (const char * name) const {
-                return childs->at(QString::fromUtf8(name));
-            }
-
-            auto & operator [] (const std::string & name) {
-                return childs->at(QString::fromStdString(name));
-            }
-
-            const auto & operator [] (const std::string & name) const {
-                return childs->at(QString::fromStdString(name));
-            }
-
-            auto empty() const {
-                return childs == nullptr || childs->empty();
-            }
-
-            auto begin() {
-                return childs->begin();
-            }
-
-            auto end() {
-                return childs->end();
-            }
-        };
-
-        var_node getVarTree(const char * varName);
-
-        var_node getVarTree(const std::string & varName) {
-            return getVarTree(varName.c_str());
-        }
-
-        var_node getVarTree(const QString & varName) {
-            return getVarTree(varName.toStdString().c_str());
-        }
-
-    signals:
-    public slots:
-        QVariant getVar(const QString & varName, const QVariant & defVal) {
-            return getVar(varName.toStdString().c_str(), &defVal);
-        }
-
-        void setVar(const QString & varName, const QVariant & val) {
-            setVar(varName.toStdString().c_str(), val);
-        }
-    private:
-        static HomeostasConfiguration * singleton_;
-
-        uint64_t row_next_id_;
-        std::unique_ptr<sqlite3pp::database> db_;
-        std::unique_ptr<sqlite3pp::query> st_sel_;
-        std::unique_ptr<sqlite3pp::query> st_sel_by_pid_;
-        std::unique_ptr<sqlite3pp::command> st_ins_;
-        std::unique_ptr<sqlite3pp::command> st_upd_;
-
-        void connect_db();
-
-        QVariant getVar(sqlite3pp::query::iterator & i, const QVariant * p_defVal = nullptr, uint64_t * p_id = nullptr);
-        QVariant getVar(uint64_t pid, const char * varName, const QVariant * p_defVal = nullptr, uint64_t * p_id = nullptr);
-        uint64_t getVarParentId(const char * varName, const char ** p_name = nullptr, bool * p_pid_valid = nullptr);
-        void setVar(uint64_t pid, const char * varName, const QVariant & val);
-};
-//------------------------------------------------------------------------------
-////////////////////////////////////////////////////////////////////////////////
-//------------------------------------------------------------------------------
 class Homeostas : public QObject {
-        Q_OBJECT
-        Q_PROPERTY(QString uniqueId READ uniqueId WRITE setUniqueId)
-    public:
-        explicit Homeostas(QObject *parent = nullptr) : QObject(parent) {
-            Q_ASSERT( singleton_ == nullptr );
-            singleton_ = this;
-        }
+    Q_OBJECT
+    Q_PROPERTY(QString uniqueId READ uniqueId WRITE setUniqueId)
+public:
+    explicit Homeostas(QObject * parent = nullptr) : QObject(parent) {}
 
-        static auto & singleton() {
-            return *singleton_;
-        }
+    static auto instance() {
+        static Homeostas singleton;
+        return &singleton;
+    }
 
-        static auto & trackers() {
-            return singleton_->trackers_;
-        }
+    static auto & trackers() {
+        return instance()->trackers_;
+    }
 
-        QString uniqueId() const {
-            return uniqueId_;
-        }
+    QString uniqueId() const {
+        return uniqueId_;
+    }
 
-        void setUniqueId(const QString & uniqueId) {
-            uniqueId_ = uniqueId;
-        }
-    signals:
-    public slots:
-        QString newUniqueId();
+    void setUniqueId(const QString & uniqueId) {
+        uniqueId_ = uniqueId;
+    }
+signals:
+public slots:
+    QString newUniqueId();
 
-        void startServer();
-        void stopServer();
+    void startServer();
+    void stopServer();
 
-        void startTrackers();
-        void stopTrackers();
-    private:
-        static Homeostas * singleton_;
-
-        QString uniqueId_;
-        std::vector<std::shared_ptr<homeostas::directory_tracker>> trackers_;
-        std::unique_ptr<homeostas::server> server_;
+    void startTrackers();
+    void stopTrackers();
+private:
+    QString uniqueId_;
+    std::vector<std::shared_ptr<homeostas::directory_tracker>> trackers_;
+    std::unique_ptr<homeostas::server> server_;
 };
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-class DirectoryTracker : public QObject {
-		Q_OBJECT
-        //Q_PROPERTY(QString author READ author WRITE setAuthor NOTIFY authorChanged)
-        //Q_PROPERTY(QDateTime creationDate READ creationDate WRITE setCreationDate NOTIFY creationDateChanged)
-        Q_PROPERTY(
-            QString directoryUserDefinedName
-            READ directoryUserDefinedName
-            )
-        Q_PROPERTY(
-            QString directoryPathName
-            READ directoryPathName
-            )
-    public:
-        explicit DirectoryTracker(QObject *parent = nullptr) : QObject(parent) {
+/*class DirectoryTracker : public QObject {
+    Q_OBJECT
+    //Q_PROPERTY(QString author READ author WRITE setAuthor NOTIFY authorChanged)
+    //Q_PROPERTY(QDateTime creationDate READ creationDate WRITE setCreationDate NOTIFY creationDateChanged)
+    Q_PROPERTY(
+        QString directoryUserDefinedName
+        READ directoryUserDefinedName
+        )
+    Q_PROPERTY(
+        QString directoryPathName
+        READ directoryPathName
+        )
+public:
+    explicit DirectoryTracker(QObject *parent = nullptr) : QObject(parent) {}
 
-        }
+    //QString author() const {
+    //    return author_;
+    //}
 
-        //QString author() const {
-        //    return author_;
-        //}
+    //void setAuthor(const QString &author) {
+    //    author_ = author;
+    //    authorChanged();
+    //}
 
-        //void setAuthor(const QString &author) {
-        //    author_ = author;
-        //    authorChanged();
-        //}
+    //QDateTime creationDate() const {
+    //    return creationDate_;
+    //}
 
-        //QDateTime creationDate() const {
-        //    return creationDate_;
-        //}
+    //void setCreationDate(const QDateTime &creationDate) {
+    //    creationDate_ = creationDate;
+    //    creationDateChanged();
+    //}
 
-        //void setCreationDate(const QDateTime &creationDate) {
-        //    creationDate_ = creationDate;
-        //    creationDateChanged();
-        //}
+    QString directoryUserDefinedName() const {
+        return QString::fromStdString(
+            dt_ ? dt_->dir_user_defined_name() : std::string());
+    }
 
-        QString directoryUserDefinedName() const {
-            return QString::fromStdString(dt_ == nullptr ? std::string() : dt_->dir_user_defined_name());
-        }
+    QString directoryPathName() const {
+        return QString::fromStdString(
+            dt_ ? dt_->dir_path_name() : std::string());
+    }
 
-        QString directoryPathName() const {
-            return QString::fromStdString(dt_ == nullptr ? std::string() : dt_->dir_path_name());
-        }
+signals:
+    //void authorChanged();
+    //void creationDateChanged();
 
-    signals:
-        //void authorChanged();
-        //void creationDateChanged();
+public slots:
+    //void doSend(int count);
+    void startTracker();
+    void stopTracker();
+private:
+    std::unique_ptr<homeostas::directory_tracker> dt_;
 
-    public slots:
-        //void doSend(int count);
-        void startTracker();
-        void stopTracker();
-    private:
-        mutable std::shared_ptr<homeostas::directory_tracker> dt_;
-
-        //QString author_;
-        //QDateTime creationDate_;
-};
+    //QString author_;
+    //QDateTime creationDate_;
+};*/
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 class DirectoriesTrackersModel : public QAbstractListModel {
-        Q_OBJECT
-    public:
-        enum DirectoryTrackerRole {
-            DirectoryUserDefinedNameRole = Qt::DisplayRole,
-            DirectoryPathNameRole = Qt::UserRole
-        };
-        Q_ENUM(DirectoryTrackerRole)
+    Q_OBJECT
+public:
+    enum DirectoryTrackerRole {
+        DirectoryUserDefinedNameRole = Qt::DisplayRole,
+        DirectoryPathNameRole = Qt::UserRole
+    };
+    Q_ENUM(DirectoryTrackerRole)
 
-        DirectoriesTrackersModel(QObject *parent = nullptr) :
-            QAbstractListModel(parent),
-            trackers_(Homeostas::trackers())
-        {
-            Q_ASSERT( singleton_ == nullptr );
-            singleton_ = this;
-        }
+    explicit DirectoriesTrackersModel(QObject *parent = nullptr) : QAbstractListModel(parent) {}
 
-        static auto & singleton() {
-            return *singleton_;
-        }
+    static auto instance() {
+        static DirectoriesTrackersModel singleton;
+        return &singleton;
+    }
 
-        int rowCount(const QModelIndex & = QModelIndex()) const;
-        QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const;
-        QHash<int, QByteArray> roleNames() const;
+    int rowCount(const QModelIndex & = QModelIndex()) const;
+    QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const;
+    QHash<int, QByteArray> roleNames() const;
 
-        Q_INVOKABLE QVariantMap get(int row) const;
-        Q_INVOKABLE void append(const QString &directoryUserDefinedName, const QString &directoryPathName);
-        Q_INVOKABLE void set(int row, const QString &directoryUserDefinedName, const QString &directoryPathName);
-        Q_INVOKABLE void remove(int row);
+    Q_INVOKABLE QVariantMap get(int row) const;
+    Q_INVOKABLE void append(const QString &directoryUserDefinedName, const QString &directoryPathName);
+    Q_INVOKABLE void set(int row, const QString &directoryUserDefinedName, const QString &directoryPathName);
+    Q_INVOKABLE void remove(int row);
 
-    private:
-        static DirectoriesTrackersModel * singleton_;
-        //QList<QSharedPointer<DirectoryTracker>> trackers_;
-        std::vector<std::shared_ptr<homeostas::directory_tracker>> & trackers_;
+private:
 };
 //------------------------------------------------------------------------------
 #endif // QOBJECTS_HPP_INCLUDED

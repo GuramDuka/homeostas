@@ -54,144 +54,163 @@ namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-template <typename T>
+template <typename T
+    //, typename std::enable_if<std::is_base_of<T, std::thread>::value>::type * Base = nullptr
+>
 class thread_pool {
-    public:
-        // the destructor joins all threads
-        ~thread_pool() noexcept {
-            join();
-        }
+public:
+    // the destructor joins all threads
+    ~thread_pool() noexcept {
+        join();
+    }
 
-        void join() noexcept {
-            std::unique_lock<std::mutex> lock(queue_mutex_);
+    void join() noexcept {
+        std::unique_lock<std::mutex> lock(queue_mutex_);
 
-            auto min_threads_safe = min_threads_;
-            min_threads_ = 0;
+        auto min_threads_safe = min_threads_;
+        min_threads_ = 0;
 
-            lock.unlock();
-            queue_cond_.notify_all();
+        lock.unlock();
+        queue_cond_.notify_all();
 
-            lock.lock();
-            join_cond_.wait(lock, [&] { return workers_.empty(); });
-            clear_dead();
+        lock.lock();
+        join_cond_.wait(lock, [&] { return workers_.empty(); });
+        clear_dead();
 
-            min_threads_ = min_threads_safe;
-        }
+        min_threads_ = min_threads_safe;
+    }
 
-        // the constructor just launches some amount of workers
-        thread_pool(size_t min_threads = 0, size_t max_threads = 0, uint64_t idle_timeout = 30 * 1000000000ull)
-            noexcept :
-            min_threads_(min_threads),
-            max_threads_(max_threads),
-            idle_threads_(0),
-            idle_timeout_(idle_timeout)
-        {
-            if( min_threads_ == 0 )
-                min_threads_ = std::thread::hardware_concurrency();
+    // the constructor just launches some amount of workers
+    thread_pool(size_t min_threads = 0, size_t max_threads = 0, uint64_t idle_timeout = 30 * 1000000000ull)
+        noexcept :
+        min_threads_(min_threads),
+        max_threads_(max_threads),
+        idle_threads_(0),
+        idle_timeout_(idle_timeout)
+    {
+        static_assert(std::is_base_of<T, std::thread>::value, "Must be derived from std::thread");
 
-            if( max_threads_ != 0 && max_threads_ < min_threads_ )
-                max_threads_ = min_threads_;
-        }
+        if( min_threads_ == 0 )
+            min_threads_ = std::thread::hardware_concurrency();
 
-        // add new work item to the pool
-        template <class F, class... Args>
-        auto enqueue(F&& f, Args&&... args)
-            -> std::future<typename std::result_of<F(Args...)>::type>
-        {
-            using return_type = typename std::result_of<F(Args...)>::type;
-            auto task = std::make_shared<std::packaged_task<return_type()> >(
-                std::bind(std::forward<F>(f), std::forward<Args>(args)...));
-            std::future<return_type> res = task->get_future();
-            std::unique_lock<std::mutex> lock(queue_mutex_);
+        if( max_threads_ != 0 && max_threads_ < min_threads_ )
+            max_threads_ = min_threads_;
+    }
 
-            tasks_.emplace([task] { (*task)(); });
+    void enqueuef(const std::function<void()> & task) {
+        std::unique_lock<std::mutex> lock(queue_mutex_);
 
-            auto need_extra_thread = idle_threads_ == 0
-                && (max_threads_ == 0 || workers_.size() < max_threads_);
+        tasks_.emplace(task);
 
-            if( need_extra_thread ) {
-                std::unique_ptr<max_align_t> worker_ptr(
-                    new max_align_t [sizeof(T) / sizeof(max_align_t)
-                        + (sizeof(T) % sizeof(max_align_t) ? 1 : 0)]);
-                T * p_worker = reinterpret_cast<T *>(worker_ptr.get());
+        auto need_extra_thread = idle_threads_ == 0
+            && (max_threads_ == 0 || workers_.size() < max_threads_);
 
-                new (p_worker) T(std::bind(&thread_pool<T>::worker_function, this, p_worker));
+        if( need_extra_thread ) {
+            std::unique_ptr<max_align_t> worker_ptr(
+                new max_align_t [sizeof(T) / sizeof(max_align_t)
+                    + (sizeof(T) % sizeof(max_align_t) ? 1 : 0)]);
+            T * p_worker = reinterpret_cast<T *>(worker_ptr.get());
 
-                std::unique_ptr<T> worker(p_worker);
-                worker_ptr.release();
-                workers_.emplace(std::make_pair(p_worker, std::move(worker)));
+            new (p_worker) T(std::bind(&thread_pool<T>::worker_function, this, p_worker));
+
+            std::unique_ptr<T> worker(p_worker);
+            worker_ptr.release();
+            workers_.emplace(std::make_pair(p_worker, worker.get()));
+            worker.release();
 #ifndef NDEBUG
-                if( workers_.size() > max_threads_stat_ )
-                    max_threads_stat_ = workers_.size();
-                new_thread_exec_stat_++;
+            if( workers_.size() > max_threads_stat_ )
+                max_threads_stat_ = workers_.size();
+            new_thread_exec_stat_++;
 #endif
-            }
+        }
 #ifndef NDEBUG
-            else {
-                idle_thread_exec_stat_++;
-            }
+        else {
+            idle_thread_exec_stat_++;
+        }
 #endif
 
-            clear_dead();
-            lock.unlock();
-            queue_cond_.notify_one();
+        clear_dead();
+        lock.unlock();
+        queue_cond_.notify_one();
+    }
 
-            return res;
-        }
+    // add new work item to the pool
+    template <class F, class... Args>
+    auto enqueue(F&& f, Args&&... args)
+        -> std::future<typename std::result_of<F(Args...)>::type>
+    {
+        using return_type = typename std::result_of<F(Args...)>::type;
+        auto task = std::make_shared<std::packaged_task<return_type()> >(
+            std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+        std::future<return_type> res = task->get_future();
 
-        std::string stat() const {
+        enqueuef([task] { (*task)(); });
+
+        return res;
+    }
+
+    std::string stat() const {
 #if NDEBUG
-            return std::string();
+        return std::string();
 #else
-            std::stringstream ss;
-            ss
-                << "  max threads                    : " << std::setw(12) << std::right << max_threads_stat_ << std::endl
-                << "  max idle threads               : " << std::setw(12) << std::right << max_idle_threads_stat_ << std::endl
-                << "  dead threads by timeout        : " << std::setw(12) << std::right << dead_threads_stat_ << std::endl
-                << "  task new thread executions     : " << std::setw(12) << std::right << new_thread_exec_stat_ << std::endl
-                << "  task idle thread executions    : " << std::setw(12) << std::right << idle_thread_exec_stat_ << std::endl
-                << "  task new/idle thread exec ratio: " << std::setw(12) << std::right << std::fixed << std::setprecision(5)
-                    << (idle_thread_exec_stat_ ? double(new_thread_exec_stat_) / idle_thread_exec_stat_ : 0) << std::endl
-            ;
-            return ss.str();
+        std::ostringstream ss;
+        ss
+            << "  max threads                    : " << std::setw(12) << std::right << max_threads_stat_ << std::endl
+            << "  max idle threads               : " << std::setw(12) << std::right << max_idle_threads_stat_ << std::endl
+            << "  dead threads by timeout        : " << std::setw(12) << std::right << dead_threads_stat_ << std::endl
+            << "  task new thread executions     : " << std::setw(12) << std::right << new_thread_exec_stat_ << std::endl
+            << "  task idle thread executions    : " << std::setw(12) << std::right << idle_thread_exec_stat_ << std::endl
+            << "  task new/idle thread exec ratio: " << std::setw(12) << std::right << std::fixed << std::setprecision(5)
+                << (idle_thread_exec_stat_ ? double(new_thread_exec_stat_) / idle_thread_exec_stat_ : 0) << std::endl
+        ;
+        return ss.str();
 #endif
-        }
+    }
 
-    protected:
-        void worker_function(T * a_worker) {
-            p_this_thread_ = a_worker;
+    static auto instance() {
+        static thread_pool<T> singleton;
+        return &singleton;
+    }
+protected:
+    void worker_function(T * a_worker) {
+        auto ql = [&] {
+            return !tasks_.empty() || min_threads_ == 0;
+        };
 
-            for(;;) {
-                std::unique_lock<std::mutex> lock(queue_mutex_);
+        p_this_thread() = a_worker;
 
-                idle_threads_++;
+        for(;;) {
+            std::unique_lock<std::mutex> lock(queue_mutex_);
+
+            idle_threads_++;
 
 #ifndef NDEBUG
-                if( idle_threads_ > max_idle_threads_stat_ )
-                    max_idle_threads_stat_ = idle_threads_;
+            if( idle_threads_ > max_idle_threads_stat_ )
+                max_idle_threads_stat_ = idle_threads_;
 #endif
-
-                auto ql = [&] {
-                    return !tasks_.empty() || min_threads_ == 0;
-                };
 
 #ifndef NDEBUG
-                auto ws =
+            auto ws =
 #endif
-                queue_cond_.wait_for(lock, std::chrono::nanoseconds(idle_timeout_), ql);
+            queue_cond_.wait_for(lock, std::chrono::nanoseconds(idle_timeout_), ql);
 
-                idle_threads_--;
-
-                if( tasks_.empty() ) {
+            if( tasks_.empty() ) {
 #ifndef NDEBUG
-                    if( !ws )
-                        dead_threads_stat_++;
+                if( !ws )
+                    dead_threads_stat_++;
 #endif
-                    // timeout or join all threads
-                    // thread are unnecessary and must die
+                // timeout or join all threads
+                // thread are unnecessary and must die
+                if( idle_threads_ > min_threads_ ) {
+                    idle_threads_--;
                     terminate_herself();
                     break;
                 }
+
+                idle_threads_--;
+            }
+            else {
+                idle_threads_--;
 
                 // execute task
                 std::function<void()> task = std::move(tasks_.front());
@@ -203,59 +222,64 @@ class thread_pool {
                     task();
                 }
                 catch( const std::exception & e ) {
-                    std::cerr << e.what() << std::endl;
+                    std::cerr << e << std::endl;
                 }
                 catch( ... ) {
-                    std::cerr << "thread terminated with unhandled exception" << std::endl;
+                    std::cerr << "undefined c++ exception catched, thread terminated with unhandled exception" << std::endl;
                 }
             }
         }
+    }
 
-        void clear_dead() {
-            for( auto & p : dead_ )
-                p.join();
-
-            dead_.clear();
+    void clear_dead() {
+        for( auto & p : dead_ ) {
+            p->join();
+            delete p;
         }
 
-        void terminate_herself() {
-            auto it = workers_.find(p_this_thread_);
+        dead_.clear();
+    }
 
-            if( it == workers_.end() )
-                throw std::runtime_error("undefined behavior in thread pool");
+    void terminate_herself() {
+        auto it = workers_.find(p_this_thread());
 
-            dead_.emplace_back(std::move(*it->second));
-            it->second.release();
-            workers_.erase(it);
+        if( it == workers_.end() )
+            throw std::xruntime_error("undefined behavior in thread pool", __FILE__, __LINE__);
 
-            if( workers_.empty() ) // join pool ?
-                join_cond_.notify_one();
-        }
+        dead_.emplace_back(it->second);
+        workers_.erase(it);
 
-        static thread_local T * p_this_thread_;
+        if( workers_.empty() ) // join pool ?
+            join_cond_.notify_one();
+    }
 
-        size_t min_threads_;
-        size_t max_threads_;
-        size_t idle_threads_;
-        uint64_t idle_timeout_;
-        // need to keep track of threads so we can join them
-        std::unordered_map<T *, std::unique_ptr<T>> workers_;
-        // dead threads by idle timeout
-        std::vector<T> dead_;
-        // the task queue
-        std::queue<std::function<void()>> tasks_;
+    size_t min_threads_;
+    size_t max_threads_;
+    size_t idle_threads_;
+    uint64_t idle_timeout_;
+    // need to keep track of threads so we can join them
+    std::unordered_map<T *, T *> workers_;
+    // dead threads by idle timeout
+    std::vector<T *> dead_;
+    // the task queue
+    std::queue<std::function<void()>> tasks_;
 
-        // synchronization
-        std::mutex queue_mutex_;
-        std::condition_variable queue_cond_;
-        std::condition_variable join_cond_;
+    // synchronization
+    std::mutex queue_mutex_;
+    std::condition_variable queue_cond_;
+    std::condition_variable join_cond_;
 #ifndef NDEBUG
-        uint64_t max_threads_stat_ = 0;
-        uint64_t max_idle_threads_stat_ = 0;
-        uint64_t new_thread_exec_stat_ = 0;
-        uint64_t idle_thread_exec_stat_ = 0;
-        uint64_t dead_threads_stat_ = 0;
+    uint64_t max_threads_stat_ = 0;
+    uint64_t max_idle_threads_stat_ = 0;
+    uint64_t new_thread_exec_stat_ = 0;
+    uint64_t idle_thread_exec_stat_ = 0;
+    uint64_t dead_threads_stat_ = 0;
 #endif
+
+    auto & p_this_thread() {
+        static thread_local T * p_this_thread = nullptr;
+        return p_this_thread;
+    }
 };
 //------------------------------------------------------------------------------
 typedef thread_pool<std::thread> thread_pool_t;

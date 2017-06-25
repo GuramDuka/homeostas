@@ -51,7 +51,7 @@ void directory_tracker::worker()
             PRAGMA page_size = 4096;
             PRAGMA journal_mode = WAL;
             PRAGMA count_changes = OFF;
-            PRAGMA auto_vacuum = NONE;
+            PRAGMA auto_vacuum = FULL;
             PRAGMA cache_size = -2048;
             PRAGMA synchronous = NORMAL;
             /*PRAGMA temp_store = MEMORY;*/
@@ -75,7 +75,7 @@ void directory_tracker::worker()
 
         std::unique_lock<std::mutex> lk(mtx_);
 
-        if( cv_.wait_for(lk, std::chrono::seconds(10), [&] { return shutdown_ || oneshot_; }) )
+        if( cv_.wait_for(lk, std::chrono::seconds(60), [&] { return shutdown_ || oneshot_; }) )
             break;
     }
 
@@ -111,7 +111,7 @@ void directory_tracker::startup()
             t = t.substr(0, 13);
 
         t.push_back('-');
-        t += ctx.to_short_string();
+        t += ctx.to_string();
 
         return t;
     };
@@ -143,10 +143,7 @@ void directory_tracker::shutdown()
         return;
 
     std::unique_lock<std::mutex> lk(mtx_);
-
-    if( !oneshot_ )
-        shutdown_ = true;
-
+    shutdown_ = true;
     lk.unlock();
     cv_.notify_one();
 

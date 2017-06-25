@@ -133,14 +133,9 @@ typedef class nn_integer_data {
 		return offsetof(nn_integer_data, data_) + (length + 2) * sizeof(data_[0]);
 	}
 
-	static tlsf::TLSF_Impl & static_allocator() {
-		static tlsf::TLSF_Impl allocator; // singleton
-		return allocator;
-	}
-
 	static nn_integer nn_new(uintptr_t length) {
 #if ENABLE_TLSF
-		nn_integer p = (nn_integer) static_allocator().malloc(get_size(length));
+        nn_integer p = (nn_integer) tlsf::TLSF::instance()->malloc(get_size(length));
 #else
         nn_integer p = (nn_integer) std::malloc(get_size(length));
 #endif
@@ -152,15 +147,22 @@ typedef class nn_integer_data {
 	}
 
 	void release() {
-        if( --ref_count_ == 0 ){
+        if( --ref_count_ == 0 ) {
             this->~nn_integer_data();
-#if ENABLE_TLSF
-            static_allocator().free(this);
-#else
+#if __GNUG__
+#   pragma GCC diagnostic push
+#   pragma GCC diagnostic ignored "-Wfree-nonheap-object"
+#endif
+#   if ENABLE_TLSF
+            tlsf::TLSF::instance()->free(this);
+#   else
             std::free(this);
+#   endif
+#if __GNUG__
+#   pragma GCC diagnostic pop
 #endif
         }
-	}
+    }
 
 	sword isign() const {
 		return ((sword) data_[length_]) >> (sizeof(word) * CHAR_BIT - 1);
@@ -698,7 +700,7 @@ constexpr T hex_string(const char (&input)[length])
 
 constexpr auto Y = hex_string<std::array<std::uint8_t, 3>>("ABCDEF");
 
-#if __GNUC__ < 5 || _MSC_VER
+#if (__GNUC__ > 0 && __GNUC__ < 5) || _MSC_VER
 template <typename T> constexpr const T uint_max(const T m = T(1))
 {
 	return (m << 3) + (m << 1) > m ? uint_max<T>((m << 3) + (m << 1)) : m;
@@ -719,29 +721,25 @@ template <typename T> constexpr const T uint_max()
 }
 #endif
 
-extern const nn_integer_data nn_izero(0);
-extern const nn_integer_data nn_ione(1);
-extern const nn_integer_data nn_itwo(2);
-extern const nn_integer_data nn_ifour(4);
-extern const nn_integer_data nn_ifive(5);
-extern const nn_integer_data nn_isix(6);
-extern const nn_integer_data nn_ieight(8);
-extern const nn_integer_data nn_iten(10);
+extern nn_integer_data nn_izero;
+extern nn_integer_data nn_ione;
+extern nn_integer_data nn_itwo;
+extern nn_integer_data nn_ifour;
+extern nn_integer_data nn_ifive;
+extern nn_integer_data nn_isix;
+extern nn_integer_data nn_ieight;
+extern nn_integer_data nn_iten;
 // 1000000000u								== 0x3B9ACA00
 // 10000000000000000000u					== 0x8AC7230489E80000
 // 100000000000000000000000000000000000000u	== 0x4B3B4CA85A86C47A098A224000000000
 #if SIZEOF_WORD == 1
-//extern const nn_integer_data nn_maxull = { 1, 4, 0, { 0x00, 0xCA, 0x9A, 0x3B } };
-extern const nn_integer_data nn_maxull(uint_max<umaxword_t>());
+extern nn_integer_data nn_maxull;
 #elif SIZEOF_WORD == 2
-//extern const nn_integer_data nn_maxull = { 1, 4, 0, { 0x0000, 0x89E8, 0x2304, 0x8AC7 } };
-extern const nn_integer_data nn_maxull(uint_max<umaxword_t>());
+extern nn_integer_data nn_maxull;
 #elif SIZEOF_WORD == 4
-//extern const nn_integer_data nn_maxull = { 1, 2, 0, { 0x89E80000, 0x8AC72304 } };
-extern const nn_integer_data nn_maxull(uint_max<umaxword_t>());
+extern nn_integer_data nn_maxull;
 #elif SIZEOF_WORD == 8
-//extern const nn_integer_data nn_maxull = { 1, 2, 0, { 0x098A224000000000ull, 0x4B3B4CA85A86C47Aull } };
-extern const nn_integer_data nn_maxull(uint_max<umaxword_t>());
+extern nn_integer_data nn_maxull;
 #endif
 //------------------------------------------------------------------------------
 static inline nn_integer nn_new(uintptr_t length)
@@ -817,7 +815,7 @@ static inline nn_integer nn_init_iulong(unsigned long v)
 	return nn_init_iullong(v);
 }
 //------------------------------------------------------------------------------
-#if __GNUC__ && NDEBUG
+#if __GNUG__ >= 5 && NDEBUG
 #pragma GCC push_options
 #pragma GCC optimize("O3")
 #endif
@@ -866,7 +864,7 @@ inline nn_integer nn_integer_data::isal(uintptr_t bit_count) const
 	return result;
 }
 //------------------------------------------------------------------------------
-#if __GNUC__ && NDEBUG
+#if __GNUG__ >= 5 && NDEBUG
 #pragma GCC pop_options
 #endif
 //------------------------------------------------------------------------------

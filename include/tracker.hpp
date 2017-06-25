@@ -42,69 +42,79 @@ namespace homeostas {
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 class directory_tracker {
-    private:
-        std::string dir_user_defined_name_;
-        std::string dir_path_name_;
-        std::string db_name_;
-        std::string db_path_;
-        std::string db_path_name_;
+public:
+    ~directory_tracker() {
+        shutdown();
+    }
 
-        std::string error_;
-        std::unique_ptr<std::thread> thread_;
-        std::mutex mtx_;
-        std::condition_variable cv_;
+    /*directory_tracker(directory_tracker && o) {
+        *this = std::move(o);
+    }
 
-        bool shutdown_ = false;
-        bool oneshot_ = false;
+    directory_tracker & operator = (directory_tracker && o) {
+        return *this;
+    }*/
 
-        void worker();
-    protected:
-    public:
-        ~directory_tracker() {
-            shutdown();
-        }
+    directory_tracker() {}
 
-        directory_tracker() {}
+    directory_tracker(
+        const std::string & dir_user_defined_name,
+        const std::string & dir_path_name) :
+        dir_user_defined_name_(dir_user_defined_name),
+        dir_path_name_(dir_path_name) {}
 
-        directory_tracker(
-            const std::string & dir_user_defined_name,
-            const std::string & dir_path_name) :
-            dir_user_defined_name_(dir_user_defined_name),
-            dir_path_name_(dir_path_name) {}
+    const auto & dir_user_defined_name() const {
+        return dir_user_defined_name_;
+    }
 
-        const auto & dir_user_defined_name() const {
-            return dir_user_defined_name_;
-        }
+    auto & dir_user_defined_name(const std::string & dir_user_defined_name) {
+        dir_user_defined_name_ = dir_user_defined_name;
+        return *this;
+    }
 
-        auto & dir_user_defined_name(const std::string & dir_user_defined_name) {
-            dir_user_defined_name_ = dir_user_defined_name;
-            return *this;
-        }
+    const auto & dir_path_name() const {
+        return dir_path_name_;
+    }
 
-        const auto & dir_path_name() const {
-            return dir_path_name_;
-        }
+    auto & dir_path_name(const std::string & dir_path_name) {
+        dir_path_name_ = dir_path_name;
+        return *this;
+    }
 
-        auto & dir_path_name(const std::string & dir_path_name) {
-            dir_path_name_ = dir_path_name;
-            return *this;
-        }
+    const auto & oneshot() const {
+        return oneshot_;
+    }
 
-        const auto & oneshot() const {
-            return oneshot_;
-        }
+    auto & oneshot(bool oneshot) {
+        oneshot_ = oneshot;
+        return *this;
+    }
 
-        auto & oneshot(bool oneshot) {
-            oneshot_ = oneshot;
-            return *this;
-        }
+    bool started() const {
+        return thread_ != nullptr;
+    }
 
-        bool started() const {
-            return thread_ != nullptr;
-        }
+    void startup();
+    void shutdown();
+protected:
+    void worker();
 
-        void startup();
-        void shutdown();
+    std::string dir_user_defined_name_;
+    std::string dir_path_name_;
+    std::string db_name_;
+    std::string db_path_;
+    std::string db_path_name_;
+
+    std::string error_;
+    std::unique_ptr<std::thread> thread_;
+    std::mutex mtx_;
+    std::condition_variable cv_;
+
+    bool shutdown_ = false;
+    bool oneshot_ = false;
+private:
+    directory_tracker(const directory_tracker &);
+    void operator = (const directory_tracker &);
 };
 //------------------------------------------------------------------------------
 namespace tests {

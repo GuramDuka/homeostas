@@ -177,7 +177,7 @@ int mkdir(const std::string & path_name)
                 r = false;
             if( err != ENOTDIR && r != EEXIST )
 #endif
-                throw std::runtime_error("Error create directory, " + std::to_string(err));
+                throw std::xruntime_error("Error create directory, " + std::to_string(err), __FILE__, __LINE__);
         }
 
         return r;
@@ -187,12 +187,12 @@ int mkdir(const std::string & path_name)
         auto i = path_name.rfind(path_delimiter[0]);
 
         if( i == std::string::npos )
-            throw std::runtime_error("Error create directory");
+            throw std::xruntime_error("Error create directory", __FILE__, __LINE__);
 
         mkdir(std::string(path_name, 0, i));
 
         if( make() )
-            throw std::runtime_error("Error create directory");
+            throw std::xruntime_error("Error create directory", __FILE__, __LINE__);
     }
 
     return err;
@@ -201,9 +201,9 @@ int mkdir(const std::string & path_name)
 int access(const std::string & path_name, int mode)
 {
 #if _WIN32
-    return _waccess(QString::fromStdString(path_name).toStdWString().c_str(), mode);
+    return ::_waccess(QString::fromStdString(path_name).toStdWString().c_str(), mode);
 #else
-    return access(path_name.c_str(), mode);
+    return ::access(path_name.c_str(), mode);
 #endif
 }
 //------------------------------------------------------------------------------
@@ -211,10 +211,10 @@ std::string getenv(const std::string & var_name)
 {
 #if _WIN32
     return QString::fromWCharArray(
-        _wgetenv(QString::fromStdString(var_name).toStdWString().c_str())
+        ::_wgetenv(QString::fromStdString(var_name).toStdWString().c_str())
     ).toStdString();
 #else
-    return getenv(var_name.c_str());
+    return ::getenv(var_name.c_str());
 #endif
 }
 //------------------------------------------------------------------------------
@@ -229,12 +229,12 @@ std::string home_path(bool no_back_slash)
         s = QString::fromWCharArray(_wgetenv(L"USERPROFILE")).toStdString();
 
     if( access(s, R_OK | W_OK | X_OK) != 0 )
-        throw std::runtime_error("Access denied to user home directory");
+        throw std::xruntime_error("Access denied to user home directory", __FILE__, __LINE__);
 #else
     s = ::getenv("HOME");
 
-    if( access(s.c_str(), R_OK | W_OK | X_OK) != 0 )
-        throw std::runtime_error("Access denied to user home directory");
+    if( access(s, R_OK | W_OK | X_OK) != 0 )
+        throw std::xruntime_error("Access denied to user home directory", __FILE__, __LINE__);
 #endif
     if( no_back_slash ) {
         if( s.back() == path_delimiter[0] )
@@ -288,7 +288,7 @@ std::string temp_name(std::string dir, std::string pfx)
 #endif
 
     if( access(dir, R_OK | W_OK | X_OK) != 0 )
-        throw std::runtime_error("access denied to directory: " + dir);
+        throw std::xruntime_error("access denied to directory: " + dir, __FILE__, __LINE__);
 
 	int try_n = 0;
     char s[4 * (sizeof(int) * 3 + 2) + 1];
@@ -305,7 +305,7 @@ std::string temp_name(std::string dir, std::string pfx)
     while( !access(s, F_OK) && try_n++ < MAXTRIES );
 
 	if( try_n >= MAXTRIES )
-        throw std::range_error("function temp_name MAXTRIES reached");
+        throw std::xruntime_error("function temp_name MAXTRIES reached", __FILE__, __LINE__);
 
     return dir + path_delimiter + pfx + s;
 }
@@ -332,7 +332,7 @@ std::string get_cwd(bool no_back_slash)
 
 		if( errno != ERANGE ) {
 			auto err = errno;
-            throw std::runtime_error("Failed to get current work directory, " + std::to_string(err));
+            throw std::xruntime_error("Failed to get current work directory, " + std::to_string(err), __FILE__, __LINE__);
 		}
 
 		s.resize(s.size() << 1);
@@ -385,7 +385,7 @@ uint64_t clock_gettime_ns()
     struct timespec ts;
 
     if( ::clock_gettime(CLOCK_REALTIME, &ts) != 0 )
-        throw std::runtime_error("clock_gettime failed");
+        throw std::xruntime_error("clock_gettime failed", __FILE__, __LINE__);
 
     return 1000000000ull * ts.tv_sec + ts.tv_nsec;
 }
