@@ -63,18 +63,18 @@ extern const char path_delimiter[];
 std::string getenv(const std::string & var_name);
 //------------------------------------------------------------------------------
 #if _WIN32
-#ifndef F_OK
-#define F_OK 0
-#endif
-#ifndef X_OK
-#define X_OK 0
-#endif
-#ifndef W_OK
-#define W_OK 2
-#endif
-#ifndef R_OK
-#define R_OK 4
-#endif
+#   ifndef F_OK
+#       define F_OK 0
+#   endif
+#   ifndef X_OK
+#       define X_OK 0
+#   endif
+#   ifndef W_OK
+#       define W_OK 2
+#   endif
+#   ifndef R_OK
+#       define R_OK 4
+#   endif
 #endif
 int access(const std::string & path_name, int mode);
 //------------------------------------------------------------------------------

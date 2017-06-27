@@ -100,13 +100,25 @@ public:
     const auto & gateway() const {
         return gateway_;
     }
+
+    const std::vector<socket_addr> & interfaces() const {
+        return interfaces_;
+    }
+
+    auto & interfaces(const std::vector<socket_addr> & ifs) {
+        interfaces_ = ifs;
+        return *this;
+    }
 protected:
-	struct public_address_request {
+#if _WIN32
+#   pragma pack(1)
+#endif
+    struct PACKED public_address_request {
 		uint8_t  version = 0;
 		uint8_t  op_code = 0;
 	};
 
-	struct public_address_response {
+    struct PACKED public_address_response {
 		uint8_t  version;
 		uint8_t  op_code;
 		uint16_t result_code;
@@ -114,7 +126,7 @@ protected:
         uint32_t addr;                  // Public IP Address
 	};
 
-	struct new_port_mapping_request {
+    struct PACKED new_port_mapping_request {
         uint8_t  version               = 0;
         uint8_t  op_code               = 0; 	// OP Code = 1 for UDP or 2 for TCP
         uint16_t reserved              = 0;		// must be 0
@@ -123,7 +135,7 @@ protected:
         uint32_t port_mapping_lifetime = 0;		// Requested port mapping lifetime in seconds
 	};
 
-	struct new_port_mapping_response {
+    struct PACKED new_port_mapping_response {
 		uint8_t  version;
 		uint8_t  op_code;				// OP Code = 129 for UDP or 130 for TCP
 		uint16_t result_code;
@@ -132,6 +144,9 @@ protected:
 		uint16_t mapped_public_port;	// Mapped public port
         uint32_t port_mapping_lifetime; // Port mapping lifetime in seconds
 	};
+#if _WIN32
+#   pragma pack()
+#endif
 
 	typedef enum {
 		ResultCodeSuccess             = 0,
@@ -165,6 +180,7 @@ protected:
 
     std::function<void()> mapped_callback_;
 
+    std::vector<socket_addr> interfaces_;
     socket_addr gateway_;
     socket_addr public_addr_;
 

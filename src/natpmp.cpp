@@ -22,7 +22,7 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
-#if QT_CORE_LIB && __ANDROID__
+#if QT_CORE_LIB
 #   include <QString>
 #   include <QDebug>
 #endif
@@ -65,8 +65,8 @@ void natpmp::shutdown()
 //------------------------------------------------------------------------------
 void natpmp::worker()
 {
-    socket_->exceptions(false).type(SocketTypeUDP);
-    public_addr_.clear();
+    constexpr const auto timeout_250ms = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::milliseconds(250)).count();
 
     decltype(public_addr_) new_addr;
 
@@ -78,11 +78,8 @@ void natpmp::worker()
         public_address_response resp;
         resp.result_code = ResultCodeInvalid;
 
-        auto timeout_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::milliseconds(250)).count();
-
-        if( socket_->select_rd(timeout_ns) ) {
+        if( socket_->select_rd(timeout_250ms) ) {
             socket_->recv(&resp, sizeof(resp));
-
             new_addr.family(AF_INET).port(0);
 
             if( resp.result_code == ResultCodeSuccess && gateway_.addr_equ(socket_->peer_addr()) )
@@ -108,9 +105,7 @@ void natpmp::worker()
 
             resp.result_code = ResultCodeInvalid;
 
-            auto timeout_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::milliseconds(250)).count();
-
-            auto r = socket_->select_rd(timeout_ns);
+            auto r = socket_->select_rd(timeout_250ms);
 
             if( r )
                 socket_->recv(&resp, sizeof(resp));
@@ -150,50 +145,114 @@ void natpmp::worker()
         return resp.result_code == ResultCodeSuccess;
     };
 
-#ifndef NDEBUG
-    std::ifstream f("/proc/net/route", std::ios::binary);
-    f.exceptions(std::ios::failbit | std::ios::badbit);
-    f.unsetf(std::ios::skipws);
-    f.unsetf(std::ios::unitbuf);
-
-    std::string s;
-
-    while( !f.eof() ) {
-        std::getline(f, s, '\n');
-        std::cerr << s << std::endl;
-#   if QT_CORE_LIB && __ANDROID__
-        qDebug().noquote().nospace() << QString::fromStdString(s);
-#   endif
-    }
-#endif
+    socket_->type(SocketTypeUDP);
 
     while( !shutdown_ ) {
-        bool mapped = false;
+        try {
+            public_addr_.clear();
 
-        gateway_.family(AF_INET);
+            while( !shutdown_ ) {
+                bool mapped = false;
+                socket_addr gateway_mask;
 
-        if( gateway_.default_gateway(true) ) {
-            gateway_.port(NATPMP_PORT);
+                gateway_.family(AF_INET);
 
-#ifndef NDEBUG
-            std::cerr << gateway_ << std::endl;
-#   if QT_CORE_LIB && __ANDROID__
-            qDebug().noquote().nospace() << QString::fromStdString(std::to_string(gateway_));
-#   endif
+                if( gateway_.default_gateway(true, &gateway_mask) ) {
+                    gateway_.port(NATPMP_PORT);
+
+                    at_scope_exit( socket_->close() );
+
+                    //gateway_.saddr4.sin_addr.s_addr = htonl(socket_addr::cidr_ip4(192, 168, 5, 0, 24));
+                    //gateway_mask.saddr4.sin_addr.s_addr = htonl(socket_addr::cidr_ip4(255, 255, 255, 0, 24));
+
+                    auto nmask = ~gateway_mask.saddr4.sin_addr.s_addr;
+                    bool bad_gateway = (gateway_.saddr4.sin_addr.s_addr & nmask) == 0;
+
+#if _WIN32
+                    socket_->open(gateway_.family(), SocketTypeUDP, SocketProtoIP);
 #endif
 
-            socket_->connect(gateway_);
+                    while( !shutdown_ && !mapped ) {
+                        if( bad_gateway ) {
+                            // scan local network, try next address
+                            gateway_.saddr4.sin_addr.s_addr = htonl(ntohl(gateway_.saddr4.sin_addr.s_addr) + 1);
 
-            if( get_public_address() )
-                if( port_mapping() )
-                    mapped = true;
+                            // check end of local network ip range, (192.168.1.255 for example)
+                            if( (gateway_.saddr4.sin_addr.s_addr & nmask) == nmask )
+                                break;
+                        }
 
-            socket_->close();
+#if _WIN32
+                        socket_->remote_addr(gateway_);
+#else
+                        socket_->connect(gateway_);
+#endif
+
+                        auto mapper = [&] (const socket_addr &) {
+#if __ANDROID__
+                            uint64_t start = clock_gettime_ns();
+//                            socket_->connect(gateway_, &addr);
+#endif
+                            try {
+                                if( get_public_address() )
+                                    if( port_mapping() )
+                                        return true;
+                            }
+                            catch( ... ) {
+                                if( socket_->socket_errno() != SocketConnectionReset )
+                                    throw;
+                                socket_->open(gateway_.family(), SocketTypeUDP, SocketProtoIP);
+                            }
+
+#if QT_CORE_LIB && __ANDROID__
+                            uint64_t ellapsed = clock_gettime_ns() - start;
+                            qDebug().noquote().nospace()
+                                    << QString::fromStdString(std::to_string(socket_->local_addr())) << " -> "
+                                    << QString::fromStdString(std::to_string(gateway_)) << ", ellapsed: "
+                                    << QString::fromStdString(std::to_string_ellapsed(ellapsed));
+#endif
+
+
+                            return false;
+                        };
+
+#if 0 || __ANDROID__
+                        for( const auto & addr : interfaces_ ) {
+
+                            if( addr.is_loopback() || addr.is_link_local() )
+                                continue;
+
+                            mapped = mapper(addr);
+
+                            if( mapped )
+                                break;
+                        }
+#else
+                        mapped = mapper(gateway_);
+#endif
+
+                        if( !bad_gateway || shutdown_ || mapped )
+                            break;
+                    }
+                }
+
+                std::unique_lock<std::mutex> lock(mtx_);
+                auto timeout_s = std::chrono::seconds(mapped ? port_mapping_lifetime_ : 60);
+                cv_.wait_for(lock, timeout_s, [&] { return shutdown_; });
+            }
         }
-
-        std::unique_lock<std::mutex> lock(mtx_);
-        auto timeout_s = std::chrono::seconds(mapped ? port_mapping_lifetime_ : 1);
-        cv_.wait_for(lock, timeout_s, [&] { return shutdown_; });
+        catch( const std::exception & e ) {
+            std::cerr << e << std::endl;
+#if QT_CORE_LIB && __ANDROID__
+            qDebug() << QString::fromStdString(e.what());
+#endif
+        }
+        catch( ... ) {
+            std::cerr << "undefined c++ exception catched" << std::endl;
+#if QT_CORE_LIB && __ANDROID__
+            qDebug() << "undefined c++ exception catched";
+#endif
+        }
     }
 }
 //------------------------------------------------------------------------------

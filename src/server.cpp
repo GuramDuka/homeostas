@@ -60,6 +60,7 @@ void server::listener()
     };
 
     auto port = std::ihash<uint16_t>(clock_gettime_ns());
+    std::vector<socket_addr> all_interfaces;
     std::vector<socket_addr> interfaces;
 
     auto recheck_interfaces = [&] {
@@ -92,6 +93,8 @@ void server::listener()
 #endif
 
         std::sort(t.begin(), t.end());
+
+        all_interfaces = t;
 
         auto r = !std::equal(t.begin(), t.end(), interfaces.begin(), interfaces.end(), addr_equ)
             && t.size() != interfaces.size();
@@ -196,6 +199,7 @@ void server::listener()
 
                         natpmp_->shutdown();
 
+                        natpmp_->interfaces(all_interfaces);
                         natpmp_->private_port(port_);
                         natpmp_->port_mapping_lifetime(60);
                         natpmp_->mapped_callback([&] {

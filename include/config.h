@@ -84,21 +84,24 @@
 #   define ____
 #endif
 //------------------------------------------------------------------------------
-#if _MSC_VER <= 1900 \
-    || defined(_X86_) || defined(__x86_64) || defined(_M_X64) || _M_IX86
+#if __linux__ || __BSD__
+#   define HAVE_ENDIAN_H 1
+#endif
 //------------------------------------------------------------------------------
-#if _MSC_VER || __MINGW__
-#   define LITTLE_ENDIAN 1
-#   define BIG_ENDIAN 2
-#   define BYTE_ORDER LITTLE_ENDIAN
-#endif
-//-----------------------------------------------------------------------------
-#if __cplusplus
+#if HAVE_ENDIAN_H
+#   include <endian.h>
+#else
+#   if __cplusplus
 extern "C" {
-#endif
+#   endif
 //-----------------------------------------------------------------------------
-#include <inttypes.h>
-#include <stdint.h>
+#   if _MSC_VER || __MINGW__ || defined(_X86_) || defined(__x86_64) || defined(_M_X64) || _M_IX86
+#       define LITTLE_ENDIAN 1
+#       define BIG_ENDIAN 2
+#       define BYTE_ORDER LITTLE_ENDIAN
+#   endif
+#   include <inttypes.h>
+#   include <stdint.h>
 //-----------------------------------------------------------------------------
 static __inline__ uint16_t htobe16(uint16_t u)
 {
@@ -375,14 +378,6 @@ static __inline__ uint64_t le64dec(const void *pp)
 } // extern "C"
 #endif
 //-----------------------------------------------------------------------------
-#elif !defined(HAVE_ENDIAN_H)
-//------------------------------------------------------------------------------
-#define HAVE_ENDIAN_H 1
-//------------------------------------------------------------------------------
-#endif
-//------------------------------------------------------------------------------
-#if HAVE_ENDIAN_H
-#include <endian.h>
 #endif
 //------------------------------------------------------------------------------
 #if __cplusplus
@@ -400,6 +395,14 @@ static __inline__ uint64_t le64dec(const void *pp)
 #include <climits>
 #include <cinttypes>
 #include <cstdint>
+//------------------------------------------------------------------------------
+#if !defined(PACKED)
+#   if __GNUC__
+#       define PACKED __attribute__ ((packed))
+#   else
+#       define PACKED
+#   endif
+#endif
 //------------------------------------------------------------------------------
 namespace homeostas {
 struct leave_uninitialized_type {};

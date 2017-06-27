@@ -22,23 +22,495 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
+#include "config.h"
+//------------------------------------------------------------------------------
+#if __linux__
+#   include <netinet/in.h>
+#   include <net/if.h>
+#   include <stdio.h>
+#   include <string.h>
+#   include <stdlib.h>
+#   include <unistd.h>
+#   include <sys/socket.h>
+#   include <sys/ioctl.h>
+#   include <linux/netlink.h>
+#   include <linux/rtnetlink.h>
+#   include <sys/types.h>
+#   include <sys/socket.h>
+#   include <arpa/inet.h>
+//#   include <linux/ip.h>
+//#   include <netinet/ip_icmp.h>
+#endif
+#if QT_CORE_LIB && __ANDROID__
+#   include <QString>
+#   include <QDebug>
+#endif
+#include <chrono>
+//------------------------------------------------------------------------------
+#include "port.hpp"
 #include "socket.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-// There is no portable method to get the default route gateway.
-// So below are four (or five ?) differents functions implementing this.
-// Parsing /proc/net/route is for linux.
-// sysctl is the way to access such informations on BSD systems.
-// Many systems should provide route information through raw PF_ROUTE
-// sockets.
-// In MS Windows, default gateway is found by looking into the registry
-// or by using GetBestRoute().
-int get_default_gateway(in_addr * addr)
+int get_default_gateway(in_addr * addr, in_addr * mask)
 {
-#if __linux__
+#if 0 && __ANDROID__
+#if _WIN32
+#pragma pack(1)
+#endif
+    struct iphdr {
+        uint8_t ihl:4,
+            version:4;
+        uint8_t tos;
+        uint16_t tot_len;
+        uint16_t id;
+        uint16_t frag_off;
+        uint8_t ttl;
+        uint8_t protocol;
+        uint16_t check;
+        uint32_t saddr;
+        uint32_t daddr;
+    };
+
+    struct icmphdr {
+        uint8_t type;          // ICMP packet type
+        uint8_t code;          // Type sub code
+        uint16_t checksum;
+        uint16_t id;
+        uint16_t seq;
+        uint64_t timestamp;    // not part of ICMP, but we need it
+    };
+
+#if _WIN32
+#pragma pack()
+#endif
+
+    constexpr const auto ICMP_ECHO_REPLY = 0;
+    constexpr const auto ICMP_DEST_UNREACH = 3;
+    constexpr const auto ICMP_TTL_EXPIRE = 11;
+    constexpr const auto ICMP_ECHO_REQUEST = 8;
+
+    constexpr const auto ICMP_MIN = 8;
+    constexpr const auto DEFAULT_PACKET_SIZE = 32;
+    constexpr const auto DEFAULT_TTL = 30;
+    constexpr const auto MAX_PING_DATA_SIZE = 1024;
+    constexpr const auto MAX_PING_PACKET_SIZE = MAX_PING_DATA_SIZE + sizeof(iphdr);
+
+    auto ip_checksum = [] (uint16_t * buffer, int size) -> uint16_t {
+        uint32_t cksum = 0;
+
+        // Sum all the words together, adding the final byte if size is odd
+        while( size > 1 ) {
+            cksum += *buffer++;
+            size -= sizeof(uint16_t);
+        }
+
+        if( size )
+            cksum += *(uint16_t *) buffer;
+
+        // Do a little shuffling
+        cksum = (cksum >> 16) + (cksum & 0xffff);
+        cksum += (cksum >> 16);
+
+        // Return the bitwise complement of the resulting mishmash
+        return (uint16_t) (~cksum);
+    };
+
+    auto init_ping_packet = [&] (icmphdr * ihdr, int packet_size, int seq_no) {
+        // Set up the packet's fields
+        ihdr->type = ICMP_ECHO_REQUEST;
+        ihdr->code = 0;
+        ihdr->checksum = 0;
+        ihdr->id = getpid();
+        ihdr->seq = seq_no;
+        ihdr->timestamp = clock_gettime_ns();
+
+        // "You're dead meat now, packet!"
+        const unsigned long int deadmeat = 0xDEADBEEF;
+        char * datapart = (char *) ihdr + sizeof(icmphdr);
+        int bytes_left = packet_size - sizeof(icmphdr);
+
+        while( bytes_left > 0 ) {
+            memcpy(datapart, &deadmeat, std::min(int(sizeof(deadmeat)),
+                    bytes_left));
+            bytes_left -= sizeof(deadmeat);
+            datapart += sizeof(deadmeat);
+        }
+
+        // Calculate a checksum on the result
+        ihdr->checksum = ip_checksum((uint16_t *) ihdr, packet_size);
+    };
+
+    auto send_ping = [] (int sd, const sockaddr_in & dst, icmphdr * send_buf, int packet_size) -> int {
+        for(;;) {
+            int bwrote = ::sendto(sd, (const char *) send_buf, packet_size, 0, (const sockaddr *) &dst, socklen_t(sizeof(dst)));
+
+            if( bwrote == -1 ) {
+                if( errno == EINTR )
+                    continue;
+                return -1;
+            }
+
+            if( bwrote == packet_size )
+                break;
+
+            return -1;
+        }
+
+        return 0;
+    };
+
+    auto recv_ping = [] (int sd, sockaddr_in & src, iphdr * recv_buf, int packet_size) -> int {
+        socklen_t from_len = sizeof(src);
+
+        for(;;) {
+            int bread = ::recvfrom(sd, (char *) recv_buf, packet_size + sizeof(iphdr), 0, (sockaddr *) &src, &from_len);
+
+            if( bread >= 0 )
+                break;
+
+            if( errno != EINTR )
+                return -1;
+        }
+
+        return 0;
+    };
+
+    auto decode_reply = [&] (iphdr * reply, int bytes, sockaddr_in * from) -> int {
+        // Skip ahead to the ICMP header within the IP packet
+        auto header_len = 4 * reply->ihl;
+        icmphdr * ihdr = (icmphdr *) ((char *) reply + header_len);
+
+        // Make sure the reply is sane
+        if( bytes < header_len + ICMP_MIN )
+            return -1;
+
+        if( ihdr->type != ICMP_ECHO_REPLY ) {
+            if( ihdr->type != ICMP_TTL_EXPIRE ) {
+                if( ihdr->type == ICMP_DEST_UNREACH ) {
+                    std::cerr << "Destination unreachable" << std::endl;
+                }
+                else {
+                    std::cerr << "Unknown ICMP packet type " << int(ihdr->type) <<
+                            " received" << std::endl;
+                }
+                return -1;
+            }
+            // If "TTL expired", fall through.  Next test will fail if we
+            // try it, so we need a way past it.
+        }
+        else if( ihdr->id != getpid() ) {
+            // Must be a reply for another pinger running locally, so just
+            // ignore it.
+            return -2;
+        }
+
+        // Figure out how far the packet travelled
+        int nHops = int(256 - reply->ttl);
+
+        if( nHops == 192 ) {
+            // TTL came back 64, so ping was probably to a host on the
+            // LAN -- call it a single hop.
+            nHops = 1;
+        }
+        else if( nHops == 128 ) {
+            // Probably localhost
+            nHops = 0;
+        }
+
+        // Okay, we ran the gamut, so the packet must be legal -- dump it
+        std::cerr << std::endl << bytes << " bytes from " <<
+                inet_ntoa(from->sin_addr) << ", icmp_seq " <<
+                ihdr->seq << ", ";
+
+        if( ihdr->type == ICMP_TTL_EXPIRE ) {
+            std::cerr << "TTL expired." << std::endl;
+            *addr = from->sin_addr;
+            return 0;
+        }
+        else {
+            std::cerr << nHops << " hop" << (nHops == 1 ? "" : "s");
+            std::cerr << ", time: " << (std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::nanoseconds(clock_gettime_ns())).count() - ihdr->timestamp) <<
+                    "ms." << std::endl;
+        }
+
+        return -1;
+    };
+
+#if _WIN32
+    base_socket dummy;
+#endif
+
+    // Figure out how big to make the ping packet
+    int packet_size = DEFAULT_PACKET_SIZE;
+    int ttl = DEFAULT_TTL;
+    ttl = 1;
+
+    sockaddr_in dst, src;
+    dst.sin_addr.s_addr = 0x08080808; // google-public-dns-a.google.com
+    dst.sin_family = AF_INET;
+
+    int sd = ::socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+
+    if( sd == -1 )
+        return -1;
+
+#if _WIN32
+    at_scope_exit( ::closesocket(sd) );
+#else
+    at_scope_exit( ::close(sd) );
+#endif
+
+    if( setsockopt(sd, IPPROTO_IP, IP_TTL, (const char *) &ttl, sizeof(ttl)) == -1 )
+        return -1;
+
+    int seq_no = 0;
+    icmphdr * send_buf = (icmphdr *) alloca(packet_size);
+    iphdr * recv_buf = (iphdr *) alloca(MAX_PING_PACKET_SIZE);
+
+    init_ping_packet(send_buf, packet_size, seq_no);
+
+    // Send the ping and receive the reply
+    if( send_ping(sd, dst, send_buf, packet_size) < 0 )
+        return -1;
+
+    int result = -1;
+
+    while( 1 ) {
+        // Receive replies until we either get a successful read,
+        // or a fatal error occurs.
+        if( recv_ping(sd, src, recv_buf, MAX_PING_PACKET_SIZE) < 0 ) {
+            // Pull the sequence number out of the ICMP header.  If
+            // it's bad, we just complain, but otherwise we take
+            // off, because the read failed for some reason.
+            auto header_len = 4 * recv_buf->ihl;
+            icmphdr * ihdr = (icmphdr *) ((char*)recv_buf + header_len);
+
+            if( ihdr->seq != seq_no ) {
+                std::cerr << "bad sequence number!" << std::endl;
+                continue;
+            }
+            else {
+                break;
+            }
+        }
+
+        result = decode_reply(recv_buf, packet_size, &src);
+
+        if( result != -2 ) {
+            // Success or fatal error (as opposed to a minor error)
+            // so take off.
+            break;
+        }
+    }
+
+    return result;
+#elif 0 && __ANDROID__
+    int sd = -1;
+
+    if( (sd = ::socket(AF_INET, SOCK_DGRAM, 0)) < 0 )
+        return -1;
+
+    at_scope_exit( ::close(sd) );
+
+    ifreq ifs[40]; // Maximum number of interfaces to scan
+    ifconf ifc;
+
+    ifc.ifc_len = sizeof(ifs);
+    ifc.ifc_req = ifs;
+
+    if( ioctl(sd, SIOCGIFCONF, &ifc) < 0 )
+        return -1;
+
+    // scan through interface list
+    ifreq * ifr, * ifend = ifs + (ifc.ifc_len / sizeof(ifreq));
+
+    for( ifr = ifc.ifc_req; ifr < ifend; ifr++ ) {
+        if( ifr->ifr_addr.sa_family != AF_INET )
+            continue;
+
+#ifndef NDEBUG
+        std::cerr << ifr->ifr_name << ": " << inet_ntoa(((sockaddr_in *) &ifr->ifr_addr)->sin_addr) << std::endl;
+#   if QT_CORE_LIB && __ANDROID__
+        qDebug().noquote().nospace() << ifr->ifr_name << ": " << inet_ntoa(((sockaddr_in *) &ifr->ifr_addr)->sin_addr);
+#   endif
+#endif
+
+        // get interface name
+        ifreq ifq;
+        strncpy(ifq.ifr_name, ifr->ifr_name, sizeof(ifq.ifr_name));
+
+        // check that the interface is up
+        if( ioctl(sd, SIOCGIFFLAGS, &ifq) < 0 )
+            continue;
+
+        if( (ifq.ifr_flags & IFF_UP) != 0 ) {
+            // get interface addr
+            addr->s_addr = ((sockaddr_in *) &ifr->ifr_addr)->sin_addr.s_addr;
+            //return 0;//break;
+        }
+    }
+
+    addr->s_addr = htonl(127 << 24 | 'd' << 16 | 'g' << 8 | 'w');
+
+    return 0;
+#elif __linux__ && !__ANDROID__
+    struct route_info {
+        struct in_addr dst;
+        struct in_addr src;
+        struct in_addr gateway;
+        char if_name[IF_NAMESIZE];
+    } rt_info;
+
+    const size_t BUFSIZE = 8192;
+    char gateway[255];
+
+    auto read_nl_sock = [] (int sock, char * buf, unsigned int seq_num, unsigned int pid) -> int {
+        struct nlmsghdr * nlHdr;
+        int readLen = 0, msgLen = 0;
+
+        do {
+            // Recieve response from the kernel
+            if( (readLen = recv(sock, buf, BUFSIZE - msgLen, 0)) < 0 ) {
+                perror("SOCK READ: ");
+                return -1;
+            }
+
+            nlHdr = (struct nlmsghdr *) buf;
+
+            // Check if the header is valid
+            if( (NLMSG_OK(nlHdr, readLen) == 0 )
+                || (nlHdr->nlmsg_type == NLMSG_ERROR)) {
+                perror("Error in recieved packet");
+                return -1;
+            }
+
+            // Check if the its the last message
+            if( nlHdr->nlmsg_type == NLMSG_DONE )
+                break;
+
+            // Else move the pointer to buffer appropriately
+            buf += readLen;
+            msgLen += readLen;
+
+            // Check if its a multi part message
+            if( (nlHdr->nlmsg_flags & NLM_F_MULTI) == 0 )
+                break;
+
+        } while( (nlHdr->nlmsg_seq != seq_num) || (nlHdr->nlmsg_pid != pid) );
+
+        return msgLen;
+    };
+
+    // For parsing the route info returned
+    auto parse_routes = [&] (struct nlmsghdr * nl_hdr) {
+        rtmsg * rt_msg = (struct rtmsg *) NLMSG_DATA(nl_hdr);
+
+        // If the route is not for AF_INET or does not belong to main routing table
+        // then return.
+        if( rt_msg->rtm_family != AF_INET || rt_msg->rtm_table != RT_TABLE_MAIN )
+            return false;
+
+        // get the rtattr field
+        rtattr * rt_attr = (rtattr *) RTM_RTA(rt_msg);
+        int rt_len = RTM_PAYLOAD(nl_hdr);
+
+        while( RTA_OK(rt_attr, rt_len) ) {
+            qDebug().noquote().nospace() << rt_attr->rta_type;
+
+            switch( rt_attr->rta_type ) {
+                case RTA_OIF:
+                    if_indextoname(*(int *) RTA_DATA(rt_attr), rt_info.if_name);
+                    break;
+                case RTA_GATEWAY:
+                    rt_info.gateway.s_addr = *(u_int *) RTA_DATA(rt_attr);
+                    break;
+                case RTA_PREFSRC:
+                    rt_info.src.s_addr = *(u_int *) RTA_DATA(rt_attr);
+                    break;
+                case RTA_DST:
+                    rt_info.dst.s_addr = *(u_int *) RTA_DATA(rt_attr);
+                    break;
+            }
+
+            rt_attr = RTA_NEXT(rt_attr, rt_len);
+        }
+
+#ifndef NDEBUG
+        std::cerr << inet_ntoa(rt_info.dst) << std::endl;
+        std::cerr << inet_ntoa(rt_info.src) << std::endl;
+        std::cerr << inet_ntoa(rt_info.gateway) << std::endl;
+#   if QT_CORE_LIB && __ANDROID__
+        qDebug().noquote().nospace() << inet_ntoa(rt_info.dst);
+        qDebug().noquote().nospace() << inet_ntoa(rt_info.src);
+        qDebug().noquote().nospace() << inet_ntoa(rt_info.gateway);
+#   endif
+#endif
+
+        if( rt_info.dst.s_addr == 0 ) {
+            sprintf(gateway, (char *) inet_ntoa(rt_info.gateway));
+            addr->s_addr = rt_info.gateway.s_addr;
+            return true;
+        }
+
+        return false;
+    };
+
+    nlmsghdr * nl_msg;
+    char msg_buf[BUFSIZE];
+
+    int sock, len;
+    unsigned int msg_seq = 0;
+
+    if( (sock = ::socket(PF_NETLINK, SOCK_DGRAM, NETLINK_ROUTE)) < 0 )
+        return -1;
+
+    at_scope_exit( ::close(sock) );
+    //memset(msg_buf, 0, BUFSIZE);
+
+    // point the header and the msg structure pointers into the buffer
+    nl_msg = (nlmsghdr *) msg_buf;
+
+    // Fill in the nlmsg header
+    nl_msg->nlmsg_len  = NLMSG_LENGTH(sizeof(rtmsg));  // Length of message.
+    nl_msg->nlmsg_type = RTM_GETROUTE;   // Get the routes from kernel routing table .
+
+    nl_msg->nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST;    // The message is a request for dump.
+    nl_msg->nlmsg_seq   = msg_seq++;   // Sequence of the message packet.
+    nl_msg->nlmsg_pid   = getpid();    // PID of process sending the request.
+
+    // Send the request
+    if( ::send(sock, nl_msg, nl_msg->nlmsg_len, 0) < 0 ) {
+        //printf("Write To Socket Failed...\n");
+        return -1;
+    }
+
+    // Read the response
+    if( (len = read_nl_sock(sock, msg_buf, msg_seq, nl_msg->nlmsg_pid)) < 0 ) {
+        //printf("Read From Socket Failed...\n");
+        return -1;
+    }
+
+    // Parse and print the response
+    //fprintf(stdout, "Destination\tGateway\tInterface\tSource\n");
+    for( ; NLMSG_OK(nl_msg, len); nl_msg = NLMSG_NEXT(nl_msg, len) ) {
+        memset(&rt_info, 0, sizeof(rt_info));
+        if( parse_routes(nl_msg) ) {
+#ifndef NDEBUG
+            std::cerr << gateway << std::endl;
+#   if QT_CORE_LIB && __ANDROID__
+            qDebug().noquote().nospace() << gateway;
+#   endif
+#endif
+            return 0;
+        }
+    }
+
+    return -1;
+#elif __linux__ && __ANDROID__
     // parse /proc/net/route which is as follow:
 
     //Iface   Destination     Gateway         Flags   RefCnt  Use     Metric  Mask            MTU     Window  IRTT
@@ -50,10 +522,10 @@ int get_default_gateway(in_addr * addr)
     // One header line, and then one line by route by route table entry.
 
     // on android bionic parse /proc/net/route which is as follow:
-    // Iface	Destination	Gateway 	Flags	RefCnt	Use	Metric	Mask        MTU	Window	IRTT
-    // wlan0	0005A8C0	00000000	0001	0       0	0       00FFFFFF	0	0       0
+    // Iface	Destination   Gateway 	      Flags	  RefCnt  Use	  Metric	Mask          MTU	  Window  IRTT
+    // wlan0	0005A8C0      00000000	      0001	  0       0       0         00FFFFFF	  0       0       0
 
-    FILE * f = fopen("/proc/net/route", "r");
+    /*FILE * f = fopen("/proc/net/route", "r");
 
     if( f == nullptr )
         return -1;
@@ -80,12 +552,13 @@ int get_default_gateway(in_addr * addr)
                     fclose(f);
                     return 0;
                 }
-
+#if __ANDROID__
                 if( d != 0 && g == 0 ) { // default on android bionic
                     addr->s_addr = d;
                     fclose(f);
                     return 0;
                 }
+#endif
             }
         }
         line++;
@@ -93,6 +566,70 @@ int get_default_gateway(in_addr * addr)
     // default route not found
     if( f != nullptr )
         fclose(f);
+
+    return -1;*/
+
+    FILE * fp = ::fopen("/proc/net/route", "r");
+
+    if( fp == nullptr )
+        return -1;
+
+    at_scope_exit( ::fclose(fp) );
+
+    char line[256];
+    int count = 0;
+    unsigned int lowest_metric = UINT_MAX;
+    in_addr_t best_gw = 0, gw_mask = 0;
+    bool found = false;
+
+    while( fgets(line, sizeof(line), fp) != nullptr ) {
+        if( count++ == 0 )
+            continue;
+
+        unsigned int net_x = 0;
+        unsigned int mask_x = 0;
+        unsigned int gw_x = 0;
+        unsigned int metric = 0;
+        unsigned int flags = 0;
+
+        char name[16];
+        name[0] = 0;
+
+        int np = ::sscanf(line, "%15s\t%x\t%x\t%x\t%*s\t%*s\t%d\t%x",
+                              name,
+                              &net_x,
+                              &gw_x,
+                              &flags,
+                              &metric,
+                              &mask_x);
+
+        if( np == 6 && (flags & IFF_UP) != 0 ) {
+#if __ANDROID__
+            if( !gw_x && net_x && mask_x && metric < lowest_metric ) {
+                found = true;
+                best_gw = net_x;
+                gw_mask = mask_x;
+                lowest_metric = metric;
+            }
+#endif
+
+            if( !net_x && !mask_x && metric < lowest_metric ) {
+                found = true;
+                best_gw = gw_x;
+                gw_mask = mask_x;
+                lowest_metric = metric;
+            }
+        }
+    }
+
+    if( found ) {
+        addr->s_addr = best_gw;
+
+        if( mask != nullptr )
+            mask->s_addr = gw_mask;
+
+        return 0;
+    }
 
     return -1;
 #elif __APPLE__
@@ -245,13 +782,17 @@ int get_default_gateway(in_addr * addr)
     CHAR gatewayValue[MAX_VALUE_LENGTH];
     DWORD gatewayValueLength = MAX_VALUE_LENGTH;
     DWORD gatewayValueType = REG_MULTI_SZ;
-    bool done = 0;
+    CHAR subnetmaskValue[MAX_VALUE_LENGTH];
+    DWORD subnetmaskValueLength = MAX_VALUE_LENGTH;
+    DWORD subnetmaskValueType = REG_MULTI_SZ;
+    bool done = false, done_mask = false;
 
     constexpr CONST CHAR networkCardsPath[] = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkCards";
     constexpr CONST CHAR interfacesPath[] = "SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces";
     constexpr CONST CHAR STR_SERVICENAME[] = "ServiceName";
     constexpr CONST CHAR STR_DHCPDEFAULTGATEWAY[] = "DhcpDefaultGateway";
     constexpr CONST CHAR STR_DEFAULTGATEWAY[] = "DefaultGateway";
+    constexpr CONST CHAR STR_SUBNETMASK[] = "SubnetMask";
 
     // The windows registry lists its primary network devices in the following location:
     // HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkCards
@@ -374,6 +915,24 @@ int get_default_gateway(in_addr * addr)
                                 done = true;
                             }
                         }
+
+                        if( done ) {
+                            if( RegQueryValueExA(interfaceKey,                            // Open registry key
+                                                                STR_SUBNETMASK,           // Name of key to query
+                                                                NULL,                     // Reserved - must be NULL
+                                                                &subnetmaskValueType,     // Receives value type
+                                                                (LPBYTE) subnetmaskValue, // Receives value
+                                                                &gatewayValueLength)      // Receives value length in bytes
+                                     == ERROR_SUCCESS )
+                            {
+                                // Check to make sure it's a string
+                                if( (subnetmaskValueType == REG_MULTI_SZ || subnetmaskValueType == REG_SZ) && (subnetmaskValueLength > 1) ) {
+                                    //printf("gatewayValue: %s\n", gatewayValue);
+                                    done_mask = true;
+                                }
+                            }
+                        }
+
                         RegCloseKey(interfaceKey);
                     }
                 }
@@ -387,6 +946,10 @@ int get_default_gateway(in_addr * addr)
 
     if( done ) {
         addr->S_un.S_addr = inet_addr(gatewayValue);
+
+        if( done_mask && mask != nullptr )
+            mask->S_un.S_addr = inet_addr(subnetmaskValue);
+
         return 0;
     }
 
@@ -400,6 +963,9 @@ int get_default_gateway(in_addr * addr)
         return -1;
 
     addr->s_addr = ip_forward.dwForwardNextHop;
+
+    if( mask != nullptr )
+        mask = 0;
 
     return 0;
 #   endif
@@ -460,194 +1026,3 @@ fail:
 //------------------------------------------------------------------------------
 } // namespace homeostas
 //------------------------------------------------------------------------------
-#include <netinet/in.h>
-#include <net/if.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <sys/ioctl.h>
-#include <linux/netlink.h>
-#include <linux/rtnetlink.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-
-
-#define BUFSIZE 8192
-char gateway[255];
-
-struct route_info {
-    struct in_addr dstAddr;
-    struct in_addr srcAddr;
-    struct in_addr gateWay;
-    char ifName[IF_NAMESIZE];
-};
-
-int readNlSock(int sockFd, char *bufPtr, unsigned int seqNum, unsigned int pId)
-{
-    struct nlmsghdr *nlHdr;
-    int readLen = 0, msgLen = 0;
-
- do {
-    /* Recieve response from the kernel */
-        if ((readLen = recv(sockFd, bufPtr, BUFSIZE - msgLen, 0)) < 0) {
-            perror("SOCK READ: ");
-            return -1;
-        }
-
-        nlHdr = (struct nlmsghdr *) bufPtr;
-
-    /* Check if the header is valid */
-        if ((NLMSG_OK(nlHdr, readLen) == 0)
-            || (nlHdr->nlmsg_type == NLMSG_ERROR)) {
-            perror("Error in recieved packet");
-            return -1;
-        }
-
-    /* Check if the its the last message */
-        if (nlHdr->nlmsg_type == NLMSG_DONE) {
-            break;
-        } else {
-    /* Else move the pointer to buffer appropriately */
-            bufPtr += readLen;
-            msgLen += readLen;
-        }
-
-    /* Check if its a multi part message */
-        if ((nlHdr->nlmsg_flags & NLM_F_MULTI) == 0) {
-           /* return if its not */
-            break;
-        }
-    } while ((nlHdr->nlmsg_seq != seqNum) || (nlHdr->nlmsg_pid != pId));
-    return msgLen;
-}
-/* For printing the routes. */
-void printRoute(struct route_info *rtInfo)
-{
-    char tempBuf[512];
-
-/* Print Destination address */
-    if (rtInfo->dstAddr.s_addr != 0)
-        strcpy(tempBuf,  inet_ntoa(rtInfo->dstAddr));
-    else
-        sprintf(tempBuf, "*.*.*.*\t");
-    fprintf(stdout, "%s\t", tempBuf);
-
-/* Print Gateway address */
-    if (rtInfo->gateWay.s_addr != 0)
-        strcpy(tempBuf, (char *) inet_ntoa(rtInfo->gateWay));
-    else
-        sprintf(tempBuf, "*.*.*.*\t");
-    fprintf(stdout, "%s\t", tempBuf);
-
-    /* Print Interface Name*/
-    fprintf(stdout, "%s\t", rtInfo->ifName);
-
-    /* Print Source address */
-    if (rtInfo->srcAddr.s_addr != 0)
-        strcpy(tempBuf, inet_ntoa(rtInfo->srcAddr));
-    else
-        sprintf(tempBuf, "*.*.*.*\t");
-    fprintf(stdout, "%s\n", tempBuf);
-}
-
-void printGateway()
-{
-    printf("%s\n", gateway);
-}
-/* For parsing the route info returned */
-void parseRoutes(struct nlmsghdr *nlHdr, struct route_info *rtInfo)
-{
-    struct rtmsg *rtMsg;
-    struct rtattr *rtAttr;
-    int rtLen;
-
-    rtMsg = (struct rtmsg *) NLMSG_DATA(nlHdr);
-
-/* If the route is not for AF_INET or does not belong to main routing table
-then return. */
-    if ((rtMsg->rtm_family != AF_INET) || (rtMsg->rtm_table != RT_TABLE_MAIN))
-        return;
-
-/* get the rtattr field */
-    rtAttr = (struct rtattr *) RTM_RTA(rtMsg);
-    rtLen = RTM_PAYLOAD(nlHdr);
-    for (; RTA_OK(rtAttr, rtLen); rtAttr = RTA_NEXT(rtAttr, rtLen)) {
-        switch (rtAttr->rta_type) {
-        case RTA_OIF:
-            if_indextoname(*(int *) RTA_DATA(rtAttr), rtInfo->ifName);
-            break;
-        case RTA_GATEWAY:
-            rtInfo->gateWay.s_addr= *(u_int *) RTA_DATA(rtAttr);
-            break;
-        case RTA_PREFSRC:
-            rtInfo->srcAddr.s_addr= *(u_int *) RTA_DATA(rtAttr);
-            break;
-        case RTA_DST:
-            rtInfo->dstAddr .s_addr= *(u_int *) RTA_DATA(rtAttr);
-            break;
-        }
-    }
-    //printf("%s\n", inet_ntoa(rtInfo->dstAddr));
-
-    if (rtInfo->dstAddr.s_addr == 0)
-        sprintf(gateway, (char *) inet_ntoa(rtInfo->gateWay));
-    //printRoute(rtInfo);
-
-    return;
-}
-
-int main_()
-{
-    struct nlmsghdr *nlMsg;
-    //struct rtmsg *rtMsg;
-    struct route_info *rtInfo;
-    char msgBuf[BUFSIZE];
-
-    int sock, len;
-    unsigned int msgSeq = 0;
-
-/* Create Socket */
-    if ((sock = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_ROUTE)) < 0)
-        perror("Socket Creation: ");
-
-    memset(msgBuf, 0, BUFSIZE);
-
-/* point the header and the msg structure pointers into the buffer */
-    nlMsg = (struct nlmsghdr *) msgBuf;
-    //rtMsg = (struct rtmsg *) NLMSG_DATA(nlMsg);
-
-/* Fill in the nlmsg header*/
-    nlMsg->nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));  // Length of message.
-    nlMsg->nlmsg_type = RTM_GETROUTE;   // Get the routes from kernel routing table .
-
-    nlMsg->nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST;    // The message is a request for dump.
-    nlMsg->nlmsg_seq = msgSeq++;    // Sequence of the message packet.
-    nlMsg->nlmsg_pid = getpid();    // PID of process sending the request.
-
-/* Send the request */
-    if (send(sock, nlMsg, nlMsg->nlmsg_len, 0) < 0) {
-        printf("Write To Socket Failed...\n");
-        return -1;
-    }
-
-/* Read the response */
-    if ((len = readNlSock(sock, msgBuf, msgSeq, (unsigned int) getpid())) < 0) {
-        printf("Read From Socket Failed...\n");
-    return -1;
-    }
-/* Parse and print the response */
-    rtInfo = (struct route_info *) malloc(sizeof(struct route_info));
-//fprintf(stdout, "Destination\tGateway\tInterface\tSource\n");
-    for (; NLMSG_OK(nlMsg, len); nlMsg = NLMSG_NEXT(nlMsg, len)) {
-        memset(rtInfo, 0, sizeof(struct route_info));
-        parseRoutes(nlMsg, rtInfo);
-    }
-    free(rtInfo);
-    close(sock);
-
-    printGateway();
-    return 0;
-}

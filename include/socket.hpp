@@ -152,7 +152,7 @@ constexpr size_t MIN_BUFFER_SIZE =
 constexpr SOCKET INVALID_SOCKET = (SOCKET) -1;
 #endif
 //------------------------------------------------------------------------------
-int get_default_gateway(in_addr * addr);
+int get_default_gateway(in_addr * addr, in_addr * mask = nullptr);
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
@@ -320,8 +320,16 @@ struct socket_addr {
     }
 
     template <typename T>
-    static auto cidr_ip4(T b0, T b1, T b2, T b3, T l) {
-        return ((u_long(b0) << 24) | (u_long(b1) << 16) | (u_long(b2) << 8) | u_long(b3)) & (~u_long(0) << l);
+    static uint32_t cidr_ip4(T b0, T b1, T b2, T b3, T l) {
+        uint32_t a = uint32_t(b0);
+        a <<= 8;
+        a |= b1;
+        a <<= 8;
+        a |= b2;
+        a <<= 8;
+        a |= b3;
+        a &= (~uint32_t(0)) << (32 - l);
+        return a;
     }
 
     template <typename T>
@@ -396,9 +404,9 @@ struct socket_addr {
         throw std::xruntime_error("Invalid address family", __FILE__, __LINE__);
     }
 
-    bool default_gateway(bool no_throw = false) {
+    bool default_gateway(bool no_throw = false, socket_addr * p_mask = nullptr) {
         if( storage.ss_family == AF_INET )
-            if( get_default_gateway(&saddr4.sin_addr) == 0 )
+            if( get_default_gateway(&saddr4.sin_addr, p_mask != nullptr ? &p_mask->saddr4.sin_addr : nullptr) == 0 )
                 return true;
 
         if( no_throw )
@@ -435,6 +443,30 @@ typedef enum {
     SocketProtoICMPV6  = IPPROTO_ICMPV6,
     SocketProtoRAW     = IPPROTO_RAW
 } SocketProtocol;
+//------------------------------------------------------------------------------
+typedef enum {
+    SocketError = SOCKET_ERROR,// Generic socket error translates to error below.
+    SocketSuccess = 0,         // No socket error.
+    SocketInvalid,             // Invalid socket handle.
+    SocketInvalidAddress,      // Invalid destination address specified.
+    SocketInvalidPort,         // Invalid destination port specified.
+    SocketConnectionRefused,   // No server is listening at remote address.
+    SocketTimedout,            // Timed out while attempting operation.
+    SocketEWouldblock,         // Operation would block if socket were blocking.
+    SocketNotConnected,        // Currently not connected.
+    SocketEInprogress,         // Socket is non-blocking and the connection cannot be completed immediately
+    SocketInterrupted,         // Call was interrupted by a signal that was caught before a valid connection arrived.
+    SocketConnectionAborted,   // The connection has been aborted.
+    SocketProtocolError,       // Invalid protocol for operation.
+    SocketFirewallError,       // Firewall rules forbid connection.
+    SocketInvalidSocketBuffer, // The receive buffer point outside the process's address space.
+    SocketConnectionReset,     // Connection was forcibly closed by the remote host.
+    SocketAddressInUse,        // Address already in use.
+    SocketInvalidPointer,      // Pointer type supplied as argument is invalid.
+    SocketAddrNotAvail,
+    SocketOpNotSupp,
+    SocketEUnknown             // Unknown error
+} SocketErrors;
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
@@ -622,28 +654,6 @@ public:
         ShutdownRDWR    = SHUT_RDWR
     } ShutdownMode;
 
-    typedef enum {
-        SocketError = SOCKET_ERROR,// Generic socket error translates to error below.
-        SocketSuccess = 0,         // No socket error.
-        SocketInvalid,             // Invalid socket handle.
-        SocketInvalidAddress,      // Invalid destination address specified.
-        SocketInvalidPort,         // Invalid destination port specified.
-        SocketConnectionRefused,   // No server is listening at remote address.
-        SocketTimedout,            // Timed out while attempting operation.
-        SocketEWouldblock,         // Operation would block if socket were blocking.
-        SocketNotConnected,        // Currently not connected.
-        SocketEInprogress,         // Socket is non-blocking and the connection cannot be completed immediately
-        SocketInterrupted,         // Call was interrupted by a signal that was caught before a valid connection arrived.
-        SocketConnectionAborted,   // The connection has been aborted.
-        SocketProtocolError,       // Invalid protocol for operation.
-        SocketFirewallError,       // Firewall rules forbid connection.
-        SocketInvalidSocketBuffer, // The receive buffer point outside the process's address space.
-        SocketConnectionReset,     // Connection was forcibly closed by the remote host.
-        SocketAddressInUse,        // Address already in use.
-        SocketInvalidPointer,      // Pointer type supplied as argument is invalid.
-        SocketAddrNotAvail,
-        SocketEUnknown             // Unknown error
-    } SocketErrors;
 public:
     ~basic_socket() noexcept {
         exceptions_ = false;
@@ -745,8 +755,8 @@ public:
         // or an error has occurred.
         //---------------------------------------------------------------------
         if( timeout_ns != ~uint64_t(0) ) {
-            timeout.tv_sec = decltype(timeout.tv_sec) (timeout_ns / 1000000000ull);
-            timeout.tv_usec = decltype(timeout.tv_usec) (timeout_ns % 1000000000ull);
+            timeout.tv_sec = decltype(timeout.tv_sec) (timeout_ns / 1000000000u);
+            timeout.tv_usec = decltype(timeout.tv_usec) ((timeout_ns % 1000000000u) / 1000u);
             p_timeout = &timeout;
         }
 
@@ -791,7 +801,7 @@ public:
         FD_ZERO(&fds);
         FD_SET(socket_, &fds);
 
-        return select(nullptr, nullptr, &fds, timeout_ns, p_ellapsed);
+        return select(nullptr, &fds, nullptr, timeout_ns, p_ellapsed);
     }
 
     bool select_wr(uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
@@ -800,7 +810,7 @@ public:
         FD_ZERO(&fds);
         FD_SET(socket_, &fds);
 
-        return select(nullptr, &fds, nullptr, timeout_ns, p_ellapsed);
+        return select(nullptr, nullptr, &fds, timeout_ns, p_ellapsed);
     }
 
     bool select(uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
@@ -1153,8 +1163,18 @@ public:
         return local_addr_;
     }
 
+    auto & local_addr(const socket_addr & addr) {
+        local_addr_ = addr;
+        return *this;
+    }
+
     const auto & remote_addr() const {
         return remote_addr_;
+    }
+
+    auto & remote_addr(const socket_addr & addr) {
+        remote_addr_ = addr;
+        return *this;
     }
 
     const auto & peer_addr() const {
@@ -1245,6 +1265,24 @@ public:
 
     basic_socket & proto(SocketProtocol proto) {
         socket_proto_ = proto;
+        return *this;
+    }
+
+    const auto & flags() const {
+        return socket_flags_;
+    }
+
+    basic_socket & flags(int flags) {
+        socket_flags_ = flags;
+        return *this;
+    }
+
+    const auto & socket_errno() const {
+        return socket_errno_;
+    }
+
+    basic_socket & socket_errno(SocketErrors err) {
+        socket_errno_ = err;
         return *this;
     }
 
@@ -1535,6 +1573,8 @@ protected:
                 return "Cannot assign requested address. The requested address is not valid in its context.";
             case SocketEUnknown:
                 return "Unknown error";
+            case SocketOpNotSupp:
+                return "The attempted operation is not supported for the type of object referenced.";
             default:
                 return "No such CSimpleSocket error";
         }
@@ -1593,6 +1633,9 @@ protected:
                 break;
             case WSAEADDRNOTAVAIL:
                 socket_errno_ = SocketAddrNotAvail;
+                break;
+            case WSAEOPNOTSUPP:
+                socket_errno_ = SocketOpNotSupp;
                 break;
             default:
                 socket_errno_ = SocketEUnknown;
@@ -1658,13 +1701,14 @@ protected:
     }
 
     SocketErrors translate_socket_error() {
-        return translate_socket_error(
+        auto err =
 #if _WIN32
-            WSAGetLastError()
+        WSAGetLastError()
 #else
-            errno
+        errno
 #endif
-        );
+        ;
+        return translate_socket_error(err);
     }
 
     template <typename T, typename F>
@@ -1745,11 +1789,44 @@ public:
         return connect(node, service.empty() ? nullptr : service.c_str());
     }
 
-    active_socket & connect(const socket_addr & addr) {
+    active_socket & bind(const socket_addr & addr) {
+#ifndef _WIN32
+        //--------------------------------------------------------------------------
+        // Set the following socket option SO_REUSEADDR.  This will allow the file
+        // descriptor to be reused immediately after the socket is closed instead
+        // of setting in a TIMED_WAIT state.
+        //--------------------------------------------------------------------------
+        int32_t reuse = 1;
+        setsockopt(socket_, SOL_SOCKET, SO_REUSEADDR, (const char *) &reuse, sizeof(reuse));
+#ifdef SO_REUSEPORT
+        setsockopt(socket_, SOL_SOCKET, SO_REUSEPORT, (const char *) &reuse, sizeof(reuse));
+#endif
+        //int32_t low = IPTOS_LOWDELAY;
+        //setsockopt(socket_, IPPROTO_TCP, IP_TOS, (const char *) &low, sizeof(low));
+#endif
+
+        if( ::bind(socket_, (const sockaddr *) addr.sock_data(), socklen_t(addr.size())) == SocketError ) {
+            throw_translate_socket_error();
+            return *this;
+        }
+
+        socket_errno_ = SocketSuccess;
+
+        return *this;
+    }
+
+    active_socket & connect(const socket_addr & addr, const socket_addr * p_bind_addr = nullptr) {
         open(addr.family(), socket_type_, socket_proto_);
 
         if( invalid() )
             return *this;
+
+        if( p_bind_addr != nullptr ) {
+            bind(*p_bind_addr);
+
+            if( socket_errno_ != SocketSuccess )
+                return *this;
+        }
 
         if( ::connect(socket_, (const sockaddr *) addr.data(), addr.size()) == SocketError ) {
             throw_translate_socket_error();
