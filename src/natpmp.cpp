@@ -73,28 +73,27 @@ void natpmp::worker()
 
     decltype(public_addr_) new_addr;
 
-#if QT_CORE_LIB && __ANDROID__
-    QPointer<QUdpSocket> qsocket = new QUdpSocket;
-#endif
+//#if QT_CORE_LIB && __ANDROID__
+//    QPointer<QUdpSocket> qsocket = new QUdpSocket;
+//#endif
 
     auto get_public_address = [&] {
         public_address_request req;
 
-#if QT_CORE_LIB && __ANDROID__
-        QHostAddress remote;
-        remote.setAddress(gateway_.sock_data());
-        qsocket->writeDatagram((const char *) &req, sizeof(req), remote, gateway_.port());
-#else
+//#if QT_CORE_LIB && __ANDROID__
+//        QHostAddress remote;
+//        remote.setAddress(gateway_.sock_data());
+//        qsocket->writeDatagram((const char *) &req, sizeof(req), remote, gateway_.port());
+//#else
         socket_->send(&req, sizeof(req));
-#endif
+//#endif
 
         public_address_response resp;
         resp.result_code = ResultCodeInvalid;
 
-        QHostAddress sender;
-        quint16 senderPort;
-
-        qsocket->readDatagram((char *) &resp, sizeof(resp), &sender, &senderPort);
+//        QHostAddress sender;
+//        quint16 senderPort;
+//        qsocket->readDatagram((char *) &resp, sizeof(resp), &sender, &senderPort);
 
         if( socket_->select_rd(timeout_250ms) ) {
             socket_->recv(&resp, sizeof(resp));

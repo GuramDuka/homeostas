@@ -52,6 +52,7 @@
 #endif
 #include <cstddef>
 #include <climits>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <cerrno>
@@ -68,6 +69,7 @@
 #include <memory>
 #include <iostream>
 #include <sstream>
+#include <string>
 #include <iomanip>
 #include <locale>
 #include <stdexcept>
@@ -400,7 +402,7 @@ public:
             else {
                 if( p_pool != pools_ ){
                     if( pools_ != nullptr )
-                        memcpy(p_pool, pools_, csz);
+                        std::memcpy(p_pool, pools_, csz);
 #if _WIN32
                     VirtualFree(pools_, 0, MEM_RELEASE);
 #else

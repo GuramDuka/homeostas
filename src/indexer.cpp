@@ -26,8 +26,10 @@
 //------------------------------------------------------------------------------
 #include <stack>
 #include <regex>
-#include <QString>
-#include <QRegExp>
+#if QT_CORE_LIB
+#   include <QString>
+#   include <QRegExp>
+#endif
 //------------------------------------------------------------------------------
 #include "port.hpp"
 #include "scope_exit.hpp"
@@ -286,18 +288,18 @@ void directory_reader::read(const std::string & root_path)
 		for(;;) {
 			if( readdir_r(handle, ent, &result) != 0 ) {
 				err = errno;
-                throw std::xruntime_error("Failed to read directory: " + path + ", " + std::to_string(err));
+                throw std::xruntime_error("Failed to read directory: " + path_ + ", " + std::to_string(err), __FILE__, __LINE__);
 			}
 
 			if( result == nullptr )
 				break;
 
-			if( strcmp(ent->d_name, ".") == 0  && !list_dot )
+            if( strcmp(ent->d_name, ".") == 0  && !list_dot_ )
 				continue;
-			if( strcmp(ent->d_name, "..") == 0 && !list_dotdot )
+            if( strcmp(ent->d_name, "..") == 0 && !list_dotdot_ )
 				continue;
 
-			name = ent->d_name;
+            name_ = ent->d_name;
 #else
 		for(;;) {
 			errno = 0;
@@ -370,9 +372,9 @@ void directory_reader::read(const std::string & root_path)
 			if( d_type == DT_UNKNOWN ) {
                 struct stat st;
 
-                if( ::stat(path_name.c_str(), &st) != 0 ) {
+                if( ::stat(path_name_.c_str(), &st) != 0 ) {
                     err = errno;
-                    throw std::xruntime_error("Failed to stat entry: " + path_name + ", " + std::to_string(err));
+                    throw std::xruntime_error("Failed to stat entry: " + path_name_ + ", " + std::to_string(err), __FILE__, __LINE__);
                 }
 
                 d_type = IFTODT(st.st_mode);

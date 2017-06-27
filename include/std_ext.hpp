@@ -59,9 +59,8 @@ constexpr const T & xmax(const T & a, const T & b) {
 class xruntime_error : public runtime_error {
 public:
     xruntime_error(const char * msg, const char * file, int line) :
-        runtime_error(xmsg(msg, file, line)),
-        file_(file),
-        line_(line) {
+        runtime_error(xmsg(msg, file, line))
+    {
     }
 
     xruntime_error(const string & msg, const char * file, int line) :
@@ -91,11 +90,11 @@ private:
 
     }
 
-    const char * file_;
-    int line_;
+    //const char * file_;
+    //int line_;
 
 #if __GNUG__
-    vector<string> trace_;
+    //vector<string> trace_;
 #endif
 };
 //------------------------------------------------------------------------------
