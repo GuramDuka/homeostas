@@ -2246,7 +2246,7 @@ public:
         setp(pbuf_.data(), pbuf_.data() + pbuf_.size());
     }
 protected:
-    virtual std::streamsize showmanyc() const {
+    virtual std::streamsize showmanyc() {
         // return the number of chars in the input sequence
         if( gptr() != nullptr && gptr() < egptr() )
             return egptr() - gptr();
