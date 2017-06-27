@@ -22,9 +22,12 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
-#if QT_CORE_LIB
+#if QT_CORE_LIB && __ANDROID__
 #   include <QString>
 #   include <QDebug>
+#   include <QUdpSocket>
+#   include <QPointer>
+#   include <QByteArray>
 #endif
 //------------------------------------------------------------------------------
 #ifndef NDEBUG
@@ -70,13 +73,28 @@ void natpmp::worker()
 
     decltype(public_addr_) new_addr;
 
+#if QT_CORE_LIB && __ANDROID__
+    QPointer<QUdpSocket> qsocket = new QUdpSocket;
+#endif
+
     auto get_public_address = [&] {
         public_address_request req;
 
+#if QT_CORE_LIB && __ANDROID__
+        QHostAddress remote;
+        remote.setAddress(gateway_.sock_data());
+        qsocket->writeDatagram((const char *) &req, sizeof(req), remote, gateway_.port());
+#else
         socket_->send(&req, sizeof(req));
+#endif
 
         public_address_response resp;
         resp.result_code = ResultCodeInvalid;
+
+        QHostAddress sender;
+        quint16 senderPort;
+
+        qsocket->readDatagram((char *) &resp, sizeof(resp), &sender, &senderPort);
 
         if( socket_->select_rd(timeout_250ms) ) {
             socket_->recv(&resp, sizeof(resp));
@@ -168,7 +186,7 @@ void natpmp::worker()
                     auto nmask = ~gateway_mask.saddr4.sin_addr.s_addr;
                     bool bad_gateway = (gateway_.saddr4.sin_addr.s_addr & nmask) == 0;
 
-#if _WIN32
+#if !(QT_CORE_LIB && __ANDROID__)
                     socket_->open(gateway_.family(), SocketTypeUDP, SocketProtoIP);
 #endif
 
@@ -182,14 +200,15 @@ void natpmp::worker()
                                 break;
                         }
 
-#if _WIN32
-                        socket_->remote_addr(gateway_);
-#else
+#if QT_CORE_LIB && __ANDROID__
                         socket_->connect(gateway_);
+
+#else
+                        socket_->remote_addr(gateway_);
 #endif
 
                         auto mapper = [&] (const socket_addr &) {
-#if __ANDROID__
+#if QT_CORE_LIB && __ANDROID__
                             uint64_t start = clock_gettime_ns();
 //                            socket_->connect(gateway_, &addr);
 #endif
