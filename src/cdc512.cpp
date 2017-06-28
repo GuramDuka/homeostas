@@ -116,7 +116,8 @@ void cdc512::update(const void * data, uintptr_t size)
 void cdc512::finish()
 {
     if( p ) {
-        cdc512_data pad = { p, p, p, p, p, p, p, p };
+        cdc512_data pad;
+        pad.a = pad.b = pad.c = pad.d = pad.e = pad.f = pad.g = pad.h = p;
 	
         shuffle(pad);
         shuffle();

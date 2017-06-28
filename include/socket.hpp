@@ -44,49 +44,16 @@
 #	include <unistd.h>
 #	include <fcntl.h>
 #endif
-
+//------------------------------------------------------------------------------
+#if QT_CORE_LIB
+#   include <QNetworkInterface>
+#endif
+//------------------------------------------------------------------------------
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
 #include <cstdarg>
 #include <cerrno>
-//------------------------------------------------------------------------------
-#if __CYGWIN__ || __MINGW32__
-#   include <stdarg.h>
-#   if __CYGWIN__
-#       include <w32api/windef.h>
-#   include <w32api/winbase.h>
-#   include <w32api/winreg.h>
-#   endif
-#   include <unknwn.h>
-#   include <winreg.h>
-#elif _WIN32
-#   include <windows.h>
-#   include <iphlpapi.h>
-#elif __linux__
-#   include <sys/uio.h>
-#   include <linux/if_packet.h>
-#   include <linux/if_ether.h>
-#   include <linux/if.h>
-#elif __APPLE__
-#   include <cstdlib>
-#   include <sys/sysctl.h>
-#   include <sys/socket.h>
-#   include <net/if.h>
-#   include <net/route.h>
-#elif BSD || __FreeBSD_kernel__ || (sun && __SVR4)
-#   include <cstring>
-#   include <unistd.h>
-#   include <sys/socket.h>
-#   include <net/if.h>
-#   include <net/route.h>
-#elif __HAIKU__
-#   include <cstdlib>
-#   include <unistd.h>
-#   include <net/if.h>
-#   include <sys/sockio.h>
-#endif
-//------------------------------------------------------------------------------
 #include <cassert>
 #include <type_traits>
 #include <string>
@@ -175,6 +142,15 @@ struct socket_addr {
     // move constructor
     socket_addr() noexcept {
         storage.ss_family = AF_UNSPEC;
+    }
+
+    socket_addr(const addrinfo & ai) noexcept {
+        storage.ss_family = ai.ai_family;
+        memcpy(data(), ai.ai_addr, std::min(addr_size(), socklen_t(ai.ai_addrlen)));
+    }
+
+    socket_addr(const sockaddr * sa, socklen_t sl) noexcept {
+        memcpy(&storage, sa, std::min(sizeof(storage), size_t(sl)));
     }
 
     template <class _Elem, class _Traits, class _Alloc>
@@ -1329,7 +1305,7 @@ public:
     template <typename T,
         typename std::enable_if<
             std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
-            std::is_base_of<typename T::value_type, std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>>::value
+            std::is_base_of<typename T::value_type, socket_addr>::value
         >::type * = nullptr
     >
     static T wildcards() {
@@ -1369,30 +1345,36 @@ public:
                 freeaddrinfo(result);
             );
 
-            for( rp = result; rp != nullptr; rp = rp->ai_next ) {
-                char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
-
-                auto r = getnameinfo(rp->ai_addr, socklen_t(rp->ai_addrlen),
-                    hbuf, socklen_t(sizeof(hbuf)),
-                    sbuf, socklen_t(sizeof(sbuf)),
-                    NI_NUMERICHOST | NI_NUMERICSERV);
-
-                if( r == 0 )
-                    container.push_back(hbuf);
-            }
+            for( rp = result; rp != nullptr; rp = rp->ai_next )
+                container.emplace_back(socket_addr(*rp));
         }
 
         return container;
-    }
-
-    static auto wildcards() {
-        return wildcards<std::vector<std::string>>();
     }
 
     template <typename T,
         typename std::enable_if<
             std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
             std::is_base_of<typename T::value_type, std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>>::value
+        >::type * = nullptr
+    >
+    static T wildcards() {
+        T container;
+
+        for( const auto & addr : wildcards<std::vector<socket_addr>>() )
+            container.push_back(std::to_string(addr));
+
+        return container;
+    }
+
+    static auto wildcards() {
+        return wildcards<std::vector<socket_addr>>();
+    }
+
+    template <typename T,
+        typename std::enable_if<
+            std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
+            std::is_base_of<typename T::value_type, socket_addr>::value
         >::type * = nullptr
     >
     static T interfaces() {
@@ -1405,10 +1387,10 @@ public:
         if( gethostname(node, sizeof(domain)) == 0
             && getdomainname(domain, sizeof(domain)) == 0 ) {
 
-            if( slen(domain) != 0 )
+            if( slen(domain) != 0 && strcmp(domain, "(none)") != 0 )
                 scat(scat(node, "."), domain);
 
-            addrinfo hints, * result, * rp;
+            addrinfo hints, * result = nullptr, * rp = nullptr;
 
             memset(&hints, 0, sizeof(addrinfo));
             hints.ai_family     = AF_UNSPEC;    // Allow IPv4 or IPv6
@@ -1425,7 +1407,7 @@ public:
 
             auto r = getaddrinfo(node, "0", &hints, &result);
 
-            if( r != 0 && r != EAI_NODATA ) {
+            if( r != 0 && r != EAI_NODATA && r != EAI_NONAME ) {
                 auto gai_err =
 #if _WIN32
 #   if QT_CORE_LIB
@@ -1442,22 +1424,52 @@ public:
 
             at_scope_exit( freeaddrinfo(result) );
 
-            for( rp = result; rp != nullptr; rp = rp->ai_next ) {
-                char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+            for( rp = result; rp != nullptr; rp = rp->ai_next )
+                container.push_back(socket_addr(*rp));
+#if QT_CORE_LIB
+            if( container.empty() || (container.size() == 1 && container[0].is_loopback()) ) {
+                socket_addr a;
 
-                if( getnameinfo(rp->ai_addr, socklen_t(rp->ai_addrlen),
-                        hbuf, socklen_t(sizeof(hbuf)),
-                        sbuf, socklen_t(sizeof(sbuf)),
-                        NI_NUMERICHOST | NI_NUMERICSERV) == 0 )
-                    container.push_back(hbuf);
+                for( const auto & iface : QNetworkInterface::allInterfaces() )
+                    for( const auto & addr : iface.addressEntries() ) {
+                        const auto & ip = addr.ip();
+                        if( ip.protocol() == QAbstractSocket::IPv4Protocol ) {
+                            a.family(AF_INET);
+                            a.saddr4.sin_addr.s_addr = htonl(ip.toIPv4Address());
+                        }
+                        else if( ip.protocol() == QAbstractSocket::IPv6Protocol ) {
+                            a.family(AF_INET6);
+                            Q_IPV6ADDR a6 = ip.toIPv6Address();
+                            memcpy(&a.saddr6.sin6_addr, &a6, std::min(sizeof(a.saddr6.sin6_addr), sizeof(Q_IPV6ADDR)));
+                        }
+
+                        if( a.family() != AF_UNSPEC && !a.is_loopback() )
+                            container.push_back(a);
+                    }
             }
+#endif
         }
 
         return container;
     }
 
+    template <typename T,
+        typename std::enable_if<
+            std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
+            std::is_base_of<typename T::value_type, std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>>::value
+        >::type * = nullptr
+    >
+    static T interfaces() {
+        T container;
+
+        for( const auto & addr : interfaces<std::vector<socket_addr>>() )
+            container.push_back(std::to_string(addr));
+
+        return container;
+    }
+
     static auto interfaces() {
-        return interfaces<std::vector<std::string>>();
+        return interfaces<std::vector<socket_addr>>();
     }
 protected:
     uint32_t window_size(uint32_t nOptionName) {

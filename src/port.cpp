@@ -154,7 +154,7 @@ const char path_delimiter[] =
 //------------------------------------------------------------------------------
 int mkdir(const std::string & path_name)
 {
-    int err;
+    int err = 0;
 
     auto make = [&] {
         bool r;
@@ -175,7 +175,7 @@ int mkdir(const std::string & path_name)
             err = errno;
             if( err == EEXIST )
                 r = false;
-            if( err != ENOTDIR && r != EEXIST )
+            if( err != ENOTDIR && err != EEXIST )
 #endif
                 throw std::xruntime_error("Error create directory, " + std::to_string(err), __FILE__, __LINE__);
         }

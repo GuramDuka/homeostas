@@ -149,7 +149,7 @@ typedef class nn_integer_data {
 	void release() {
         if( --ref_count_ == 0 ) {
             this->~nn_integer_data();
-#if __GNUG__
+#if __GNUG__ && !__clang__
 #   pragma GCC diagnostic push
 #   pragma GCC diagnostic ignored "-Wfree-nonheap-object"
 #endif
@@ -158,7 +158,7 @@ typedef class nn_integer_data {
 #   else
             std::free(this);
 #   endif
-#if __GNUG__
+#if __GNUG__ && !__clang__
 #   pragma GCC diagnostic pop
 #endif
         }
@@ -665,6 +665,7 @@ typedef class nn_integer_data {
 //------------------------------------------------------------------------------
 typedef nn_integer_data::nn_integer nn_integer;
 //------------------------------------------------------------------------------
+#if !__clang__
 /* Quick and dirty conversion from a single character to its hex equivelent */
 constexpr uint8_t hex_char2int(char input)
 {
@@ -699,6 +700,7 @@ constexpr T hex_string(const char (&input)[length])
 }
 
 constexpr auto Y = hex_string<std::array<std::uint8_t, 3>>("ABCDEF");
+#endif
 
 #if (__GNUC__ > 0 && __GNUC__ < 5) || _MSC_VER
 template <typename T> constexpr const T uint_max(const T m = T(1))

@@ -117,6 +117,8 @@ void Homeostas::startTrackers()
         config->set("tracker.hiew.path",
 #if __ANDROID_API__
             "/storage/1C72-0F0C/hiew"
+#elif __linux__
+            "/hiew"
 #elif _WIN32
             "c:\\hiew"
 #endif
