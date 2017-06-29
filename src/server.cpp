@@ -66,31 +66,8 @@ void server::listener()
     auto recheck_interfaces = [&] {
         std::vector<socket_addr> t;
 
-        for( const auto & ifs : basic_socket::interfaces() )
+        for( const auto & ifs : basic_socket::interfaces<decltype(t)>() )
             t.emplace_back(ifs);
-
-#if QT_CORE_LIB
-        if( t.empty() ) {
-            socket_addr a;
-
-            for( const auto & iface : QNetworkInterface::allInterfaces() )
-                for( const auto & addr : iface.addressEntries() ) {
-                    const auto & ip = addr.ip();
-                    if( ip.protocol() == QAbstractSocket::IPv4Protocol ) {
-                        a.family(AF_INET);
-                        a.saddr4.sin_addr.s_addr = htonl(ip.toIPv4Address());
-                    }
-                    else if( ip.protocol() == QAbstractSocket::IPv6Protocol ) {
-                        a.family(AF_INET6);
-                        Q_IPV6ADDR a6 = ip.toIPv6Address();
-                        memcpy(&a.saddr6.sin6_addr, &a6, std::min(sizeof(a.saddr6.sin6_addr), sizeof(Q_IPV6ADDR)));
-                    }
-
-                    if( a.family() != AF_UNSPEC )
-                        t.push_back(a);
-                }
-        }
-#endif
 
         std::sort(t.begin(), t.end());
 

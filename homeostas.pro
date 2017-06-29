@@ -19,6 +19,10 @@ win32 {
     }
 }
 
+unix {
+    LIBS += -ldl
+}
+
 *msvc {
     DEFINES += _CRT_SECURE_NO_WARNINGS FKG_FORCED_USAGE
     QMAKE_CFLAGS += -wd4996

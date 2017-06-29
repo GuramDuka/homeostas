@@ -116,16 +116,24 @@ public:
         return childs()->begin();
     }
 
-    const auto begin() const {
+    auto begin() const {
         return childs()->begin();
+    }
+
+    auto cbegin() const {
+        return childs()->cbegin();
     }
 
     auto end() {
         return childs()->end();
     }
 
-    const auto end() const {
+    auto end() const {
         return childs()->end();
+    }
+
+    auto cend() const {
+        return childs()->cend();
     }
 
     const auto & name() const {
@@ -243,7 +251,7 @@ public:
     };
 
     QVariant get(const QString & varName, const QVariant * p_defVal) {
-        return get(varName.toStdString().c_str(), std::variant(p_defVal)).get<QVariant>();
+        return get(varName.toStdString().c_str(), p_defVal != nullptr ? std::variant(*p_defVal) : std::variant()).get<QVariant>();
     }
 
     QVariant get(const QString & varName, const QVariant & defVal) {

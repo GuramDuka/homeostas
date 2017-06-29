@@ -470,6 +470,30 @@ namespace sqlite3pp {
             return rc_;
         }
 
+#if __clang__
+        int bind(int idx, int64_t value) {
+            rc_ = sqlite3_bind_int64(stmt_, idx, value);
+            if (rc_ == SQLITE_MISUSE) {
+                sqlite3_reset(stmt_);
+                rc_ = sqlite3_bind_int64(stmt_, idx, value);
+            }
+            if (rc_ != SQLITE_OK)
+                db_.throw_database_error();
+            return rc_;
+        }
+
+        int bind(int idx, uint64_t value) {
+            rc_ = sqlite3_bind_int64(stmt_, idx, value);
+            if (rc_ == SQLITE_MISUSE) {
+                sqlite3_reset(stmt_);
+                rc_ = sqlite3_bind_int64(stmt_, idx, value);
+            }
+            if (rc_ != SQLITE_OK)
+                db_.throw_database_error();
+            return rc_;
+        }
+#endif
+
         int bind(int idx, char const* value, copy_semantic fcopy) {
             rc_ = sqlite3_bind_text(stmt_, idx, value, int(std::strlen(value)), fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC);
             if (rc_ == SQLITE_MISUSE) {
@@ -560,6 +584,18 @@ namespace sqlite3pp {
             //auto idx = sqlite3_bind_parameter_index(stmt_, name);
             return bind(param_name2idx(name), value);
         }
+
+#if __clang__
+        int bind(char const* name, int64_t value) {
+            //auto idx = sqlite3_bind_parameter_index(stmt_, name);
+            return bind(param_name2idx(name), value);
+        }
+
+        int bind(char const* name, uint64_t value) {
+            //auto idx = sqlite3_bind_parameter_index(stmt_, name);
+            return bind(param_name2idx(name), value);
+        }
+#endif
 
         int bind(char const* name, char const* value, copy_semantic fcopy) {
             //auto idx = sqlite3_bind_parameter_index(stmt_, name);

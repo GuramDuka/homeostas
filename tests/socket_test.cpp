@@ -60,8 +60,7 @@ void socket_test()
 
         myip(true);
 
-        uint16_t lport_n = 0;
-        auto lport = std::to_string(std::rhash(lport_n));
+        uint16_t lport = 0;
         std::vector<passive_socket> lsocks;
         auto wildcards = passive_socket::interfaces();//passive_socket::wildcards();
 
@@ -75,7 +74,8 @@ void socket_test()
 
         for( size_t i = 0; i < wildcards.size(); i++ ) {
             auto & server = lsocks[i];
-            server.listen(wildcards[i], lport);
+            wildcards[i].port(std::rhash(lport));
+            server.listen(wildcards[i]);
 
             pool.enqueue([&] {
                 if( ++counter == wildcards.size() )
@@ -149,7 +149,7 @@ void socket_test()
                     const auto s2 = ctx2.to_string();
 
                     try {
-                        client_socket->connect(wildcards[i % wildcards.size()], lport);
+                        client_socket->connect(wildcards[i % wildcards.size()]);
                     }
                     catch( const std::xruntime_error & e ) {
                         std::unique_lock<std::mutex> lock(mtx);

@@ -203,11 +203,6 @@ public:
     }
 
 #if QT_CORE_LIB
-    variant(const QVariant * o) : type_(Null) {
-        if( o != nullptr )
-            *this = *o;
-    }
-
     variant(const QVariant & o) : type_(Null) {
         *this = o;
     }
@@ -270,7 +265,7 @@ public:
             case Boolean :
                 return *reinterpret_cast<const bool *>(placeholder_);
             case Integer :
-                return *reinterpret_cast<const int64_t *>(placeholder_);
+                return QVariant::fromValue(*reinterpret_cast<const int64_t *>(placeholder_));
             case Real    :
                 return *reinterpret_cast<const double *>(placeholder_);
             case Text    :
@@ -589,7 +584,8 @@ public:
     }
 
     auto & type(Type type) {
-        return *this = move(cast(type));
+        *this = cast(type);
+        return *this;
     }
 
     variant cast(Type type) {

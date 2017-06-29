@@ -41,10 +41,48 @@
 //#   include <linux/ip.h>
 //#   include <netinet/ip_icmp.h>
 #endif
-#if QT_CORE_LIB && __ANDROID__
+//------------------------------------------------------------------------------
+#if __CYGWIN__ || __MINGW32__
+#   include <stdarg.h>
+#   if __CYGWIN__
+#       include <w32api/windef.h>
+#   include <w32api/winbase.h>
+#   include <w32api/winreg.h>
+#   endif
+#   include <unknwn.h>
+#   include <winreg.h>
+#elif _WIN32
+#   include <windows.h>
+#   include <iphlpapi.h>
+#elif __linux__
+#   include <sys/uio.h>
+#   include <linux/if_packet.h>
+#   include <linux/if_ether.h>
+#   include <linux/if.h>
+#elif __APPLE__
+#   include <cstdlib>
+#   include <sys/sysctl.h>
+#   include <sys/socket.h>
+#   include <net/if.h>
+#   include <net/route.h>
+#elif BSD || __FreeBSD_kernel__ || (sun && __SVR4)
+#   include <cstring>
+#   include <unistd.h>
+#   include <sys/socket.h>
+#   include <net/if.h>
+#   include <net/route.h>
+#elif __HAIKU__
+#   include <cstdlib>
+#   include <unistd.h>
+#   include <net/if.h>
+#   include <sys/sockio.h>
+#endif
+//------------------------------------------------------------------------------
+#if QT_CORE_LIB
 #   include <QString>
 #   include <QDebug>
 #endif
+//------------------------------------------------------------------------------
 #include <chrono>
 //------------------------------------------------------------------------------
 #include "port.hpp"
@@ -366,10 +404,10 @@ int get_default_gateway(in_addr * addr, in_addr * mask)
     } rt_info;
 
     const size_t BUFSIZE = 8192;
-    char gateway[255];
+    //char gateway[255];
 
     auto read_nl_sock = [] (int sock, char * buf, unsigned int seq_num, unsigned int pid) -> int {
-        struct nlmsghdr * nlHdr;
+        nlmsghdr * nlHdr;
         int readLen = 0, msgLen = 0;
 
         do {
@@ -379,14 +417,21 @@ int get_default_gateway(in_addr * addr, in_addr * mask)
                 return -1;
             }
 
-            nlHdr = (struct nlmsghdr *) buf;
+            nlHdr = (nlmsghdr *) buf;
 
             // Check if the header is valid
+#if __clang__
+#   pragma GCC diagnostic push
+#   pragma GCC diagnostic ignored "-Wsign-compare"
+#endif
             if( (NLMSG_OK(nlHdr, readLen) == 0 )
                 || (nlHdr->nlmsg_type == NLMSG_ERROR)) {
                 perror("Error in recieved packet");
                 return -1;
             }
+#if __clang__
+#   pragma GCC diagnostic pop
+#endif
 
             // Check if the its the last message
             if( nlHdr->nlmsg_type == NLMSG_DONE )
@@ -419,8 +464,6 @@ int get_default_gateway(in_addr * addr, in_addr * mask)
         int rt_len = RTM_PAYLOAD(nl_hdr);
 
         while( RTA_OK(rt_attr, rt_len) ) {
-            qDebug().noquote().nospace() << rt_attr->rta_type;
-
             switch( rt_attr->rta_type ) {
                 case RTA_OIF:
                     if_indextoname(*(int *) RTA_DATA(rt_attr), rt_info.if_name);
@@ -439,20 +482,11 @@ int get_default_gateway(in_addr * addr, in_addr * mask)
             rt_attr = RTA_NEXT(rt_attr, rt_len);
         }
 
-#ifndef NDEBUG
-        std::cerr << inet_ntoa(rt_info.dst) << std::endl;
-        std::cerr << inet_ntoa(rt_info.src) << std::endl;
-        std::cerr << inet_ntoa(rt_info.gateway) << std::endl;
-#   if QT_CORE_LIB && __ANDROID__
-        qDebug().noquote().nospace() << inet_ntoa(rt_info.dst);
-        qDebug().noquote().nospace() << inet_ntoa(rt_info.src);
-        qDebug().noquote().nospace() << inet_ntoa(rt_info.gateway);
-#   endif
-#endif
-
         if( rt_info.dst.s_addr == 0 ) {
-            sprintf(gateway, (char *) inet_ntoa(rt_info.gateway));
+            //sprintf(gateway, "%s", (char *) inet_ntoa(rt_info.gateway));
             addr->s_addr = rt_info.gateway.s_addr;
+            if( mask != nullptr )
+                mask = 0;
             return true;
         }
 
@@ -496,18 +530,18 @@ int get_default_gateway(in_addr * addr, in_addr * mask)
 
     // Parse and print the response
     //fprintf(stdout, "Destination\tGateway\tInterface\tSource\n");
+#if __clang__
+#   pragma GCC diagnostic push
+#   pragma GCC diagnostic ignored "-Wsign-compare"
+#endif
     for( ; NLMSG_OK(nl_msg, len); nl_msg = NLMSG_NEXT(nl_msg, len) ) {
         memset(&rt_info, 0, sizeof(rt_info));
-        if( parse_routes(nl_msg) ) {
-#ifndef NDEBUG
-            std::cerr << gateway << std::endl;
-#   if QT_CORE_LIB && __ANDROID__
-            qDebug().noquote().nospace() << gateway;
-#   endif
-#endif
+        if( parse_routes(nl_msg) )
             return 0;
-        }
     }
+#if __clang__
+#   pragma GCC diagnostic pop
+#endif
 
     return -1;
 #elif __linux__ && __ANDROID__
