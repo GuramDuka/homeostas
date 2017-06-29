@@ -56,9 +56,11 @@
 #endif
 //------------------------------------------------------------------------------
 #if !defined(HAVE_READDIR_R)
-#   if defined(__GNUC_PREREQ)
-#       if __GNUC_PREREQ (3, 2)
-#           define HAVE_READDIR_R (_POSIX_C_SOURCE >= 1 || _XOPEN_SOURCE || _BSD_SOURCE || _SVID_SOURCE || _POSIX_SOURCE)
+#   if defined(__GNUC_PREREQ) && defined(__GLIBC_PREREQ)
+#       if __GNUC_PREREQ (3, 2) && !__GLIBC_PREREQ(2, 19 + 1)
+#           if _POSIX_C_SOURCE || _BSD_SOURCE || _SVID_SOURCE
+#               define HAVE_READDIR_R 1
+#           endif
 #       endif
 #   endif
 #endif

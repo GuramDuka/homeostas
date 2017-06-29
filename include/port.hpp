@@ -32,7 +32,10 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#if __GNUG__ >= 5 || (__GNUG__ >= 4 && __MINGW32__) || _MSC_VER
+#if __linux__ && !__ANDROID__
+#   include <sys/io.h>
+#endif
+#if (__GNUG__ >= 4 && __MINGW32__) || _MSC_VER
 #   include <io.h>
 #   include <share.h>
 #endif

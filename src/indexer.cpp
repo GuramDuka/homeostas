@@ -163,6 +163,16 @@ struct file_stat :
 //------------------------------------------------------------------------------
 void directory_reader::read(const std::string & root_path)
 {
+    struct stack_entry {
+#if _WIN32
+        HANDLE handle;
+#else
+        DIR * handle;
+#endif
+        std::string path;
+    };
+
+    std::stack<stack_entry> stack;
     QRegExp mask_regex(mask_.empty() ? ".*" : mask_.c_str());
     QRegExp exclude_regex(exclude_.c_str());
 
@@ -171,17 +181,6 @@ void directory_reader::read(const std::string & root_path)
     if( path_.back() == path_delimiter[0] )
         path_.pop_back();
 
-	struct stack_entry {
-#if _WIN32
-		HANDLE handle;
-#else
-		DIR * handle;
-#endif
-        std::string path;
-	};
-
-	std::stack<stack_entry> stack;
-	
 #if _WIN32
 	at_scope_exit(
 		while( !stack.empty() ) {
@@ -733,7 +732,7 @@ void directory_indexer::reindex(
 
         int in = -1;
 
-#if __GNUC__ >= 5 || _MSC_VER
+#if _MSC_VER
         at_scope_exit(
             if( in != -1 )
                 ::_close(in);
@@ -749,11 +748,14 @@ void directory_indexer::reindex(
         auto err = errno;
 #if _WIN32
         err = _wsopen_s(&in, QString::fromStdString(path_name).toStdWString().c_str(), _O_RDONLY, _SH_DENYNO, _S_IREAD | _S_IWRITE);
+#elif __MINGW32__
+        err = _sopen_s(&in, path_name.c_str(), _O_RDONLY, _SH_DENYNO, _S_IREAD | _S_IWRITE);
+#elif __linux__
+        in = ::open(path_name.c_str(), O_RDONLY | O_NOATIME);
+        err = in == -1 ? errno : 0;
 #elif (__GNUG__ > 0 && __GNUC__ < 5)
         in = ::open(path_name.c_str(), O_RDONLY);
         err = in == -1 ? errno : 0;
-#else
-        err = _sopen_s(&in, path_name.c_str(), _O_RDONLY, _SH_DENYNO, _S_IREAD | _S_IWRITE);
 #endif
         //std::wifstream in(dr.path_name, std::ios::binary);
         //in.exceptions(std::ios::failbit | std::ios::badbit);
@@ -790,12 +792,12 @@ void directory_indexer::reindex(
 
             if( bmtim == 0 || bmtim != mtim ) {
                 auto r =
-#if __GNUC__ >= 5 || _MSC_VER
+#if _MSC_VER
                 _read
 #else
                 ::read
 #endif
-                (in, &buf[0], uint32_t(block_size));
+                    (in, &buf[0], uint32_t(block_size));
 
                 if( r == -1 ) {
                     //err = errno;

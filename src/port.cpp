@@ -281,7 +281,7 @@ std::string temp_name(std::string dir, std::string pfx)
     if( pfx.empty() )
         pfx = "temp";
 
-#if __GNUC__ >= 5 || _MSC_VER
+#if _MSC_VER
     int pid = _getpid();
 #else
     int pid = getpid();

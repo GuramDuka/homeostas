@@ -470,7 +470,7 @@ namespace sqlite3pp {
             return rc_;
         }
 
-#if __clang__
+#if __clang__ || __GNUG__ >= 7
         int bind(int idx, int64_t value) {
             rc_ = sqlite3_bind_int64(stmt_, idx, value);
             if (rc_ == SQLITE_MISUSE) {
@@ -585,7 +585,7 @@ namespace sqlite3pp {
             return bind(param_name2idx(name), value);
         }
 
-#if __clang__
+#if __clang__ || __GNUG__ >= 7
         int bind(char const* name, int64_t value) {
             //auto idx = sqlite3_bind_parameter_index(stmt_, name);
             return bind(param_name2idx(name), value);

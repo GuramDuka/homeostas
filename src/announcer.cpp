@@ -97,7 +97,7 @@ void announcer::worker()
         }
 
         std::unique_lock<std::mutex> lock(mtx_);
-        cv_.wait_for(lock, std::chrono::seconds(3), [&] { return shutdown_; });
+        cv_.wait_for(lock, std::chrono::seconds(60), [&] { return shutdown_; });
 
         if( shutdown_ )
             break;

@@ -43,6 +43,7 @@
 #	include <sys/uio.h>
 #	include <unistd.h>
 #	include <fcntl.h>
+#   include <poll.h>
 #endif
 //------------------------------------------------------------------------------
 #if QT_CORE_LIB
@@ -145,8 +146,7 @@ struct socket_addr {
     }
 
     socket_addr(const addrinfo & ai) noexcept {
-        storage.ss_family = ai.ai_family;
-        memcpy(data(), ai.ai_addr, std::min(addr_size(), socklen_t(ai.ai_addrlen)));
+        memcpy(&storage.ss_family, ai.ai_addr, std::min(sizeof(storage), size_t(ai.ai_addrlen)));
     }
 
     socket_addr(const sockaddr * sa, socklen_t sl) noexcept {
@@ -430,6 +430,7 @@ typedef enum {
     SocketTimedout,            // Timed out while attempting operation.
     SocketEWouldblock,         // Operation would block if socket were blocking.
     SocketNotConnected,        // Currently not connected.
+    SocketEPipe,               // SIGPIPE
     SocketEInprogress,         // Socket is non-blocking and the connection cannot be completed immediately
     SocketInterrupted,         // Call was interrupted by a signal that was caught before a valid connection arrived.
     SocketConnectionAborted,   // The connection has been aborted.
@@ -720,11 +721,13 @@ public:
         return *this;
     }
 
-    bool select(fd_set * p_except_fds, fd_set * p_read_fds, fd_set * p_write_fds, uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
+    bool select(fd_set * p_read_fds, fd_set * p_write_fds, fd_set * p_except_fds, uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
         uint64_t started = p_ellapsed != nullptr ? clock_gettime_ns() : 0;
-        struct timeval * p_timeout = nullptr;
-        struct timeval   timeout;
-
+#if _WIN32 || _POSIX_C_SOURCE < 200112L
+        timeval * p_timeout = nullptr, timeout;
+#else
+        timespec * p_timeout = nullptr, timeout;
+#endif
         //---------------------------------------------------------------------
         // If timeout has been specified then set value, otherwise set timeout
         // to NULL which will block until a descriptor is ready for read/write
@@ -732,15 +735,20 @@ public:
         //---------------------------------------------------------------------
         if( timeout_ns != ~uint64_t(0) ) {
             timeout.tv_sec = decltype(timeout.tv_sec) (timeout_ns / 1000000000u);
+#if _WIN32 || _POSIX_C_SOURCE < 200112L
             timeout.tv_usec = decltype(timeout.tv_usec) ((timeout_ns % 1000000000u) / 1000u);
+#else
+            timeout.tv_nsec = decltype(timeout.tv_nsec) (timeout_ns % 1000000000u);
+#endif
             p_timeout = &timeout;
         }
 
         bool r = false;
-        int n = ::select(1, p_read_fds, p_write_fds, p_except_fds, p_timeout);
-
-        if ( p_ellapsed != nullptr )
-            *p_ellapsed = clock_gettime_ns() - started;
+#if _WIN32 || _POSIX_C_SOURCE < 200112L
+        int n = ::select(int(socket_ + 1), p_read_fds, p_write_fds, p_except_fds, p_timeout);
+#else
+        int n = ::pselect(int(socket_ + 1), p_read_fds, p_write_fds, p_except_fds, p_timeout, nullptr);
+#endif
 
         if( n == -1 ) {
             throw_translate_socket_error();
@@ -768,25 +776,88 @@ public:
             }
         }
 
+        if ( p_ellapsed != nullptr )
+            *p_ellapsed = clock_gettime_ns() - started;
+
         return r;
     }
 
     bool select_rd(uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
+#if _WIN32
+        fd_set fds;
+
+        FD_ZERO(&fds);
+        FD_SET(socket_, &fds);
+
+        return select(&fds, nullptr, nullptr, timeout_ns, p_ellapsed);
+#else
+        uint64_t started = p_ellapsed != nullptr ? clock_gettime_ns() : 0;
+        pollfd pfd = { socket_, POLLIN, 0 };
+        timespec * p_timeout = nullptr, timeout;
+
+        if( timeout_ns != ~uint64_t(0) ) {
+            timeout.tv_sec = decltype(timeout.tv_sec) (timeout_ns / 1000000000u);
+            timeout.tv_nsec = decltype(timeout.tv_nsec) (timeout_ns % 1000000000u);
+            p_timeout = &timeout;
+        }
+
+        switch( ppoll(&pfd, 1, p_timeout, nullptr) ) {
+            case  0 : // timeout
+                break;
+            default :
+                if( (pfd.revents & POLLNVAL) == 0 )
+                    return true;
+                errno = EBADF;
+                // FALLTHROUGH
+            case -1 : // error
+                throw_translate_socket_error();
+                break;
+        }
+
+        if ( p_ellapsed != nullptr )
+            *p_ellapsed = clock_gettime_ns() - started;
+
+        return false;
+#endif
+    }
+
+    bool select_wr(uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
+#if _WIN32
         fd_set fds;
 
         FD_ZERO(&fds);
         FD_SET(socket_, &fds);
 
         return select(nullptr, &fds, nullptr, timeout_ns, p_ellapsed);
-    }
+#else
+        uint64_t started = p_ellapsed != nullptr ? clock_gettime_ns() : 0;
+        pollfd pfd = { socket_, POLLOUT, 0 };
+        timespec * p_timeout = nullptr, timeout;
 
-    bool select_wr(uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
-        fd_set fds;
+        if( timeout_ns != ~uint64_t(0) ) {
+            timeout.tv_sec = decltype(timeout.tv_sec) (timeout_ns / 1000000000u);
+            timeout.tv_nsec = decltype(timeout.tv_nsec) (timeout_ns % 1000000000u);
+            p_timeout = &timeout;
+        }
 
-        FD_ZERO(&fds);
-        FD_SET(socket_, &fds);
+        switch( ppoll(&pfd, 1, p_timeout, nullptr) ) {
+            case  0 : // timeout
+                break;
+            default :
+                if( (pfd.revents & POLLNVAL) == 0 )
+                    return true;
+                errno = EBADF;
+                // FALLTHROUGH
+            case -1 : // error
+                throw_translate_socket_error();
+                break;
+        }
 
-        return select(nullptr, nullptr, &fds, timeout_ns, p_ellapsed);
+        if ( p_ellapsed != nullptr )
+            *p_ellapsed = clock_gettime_ns() - started;
+
+        return false;
+#endif
     }
 
     bool select(uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
@@ -812,9 +883,13 @@ public:
 
     size_t recv(void * buffer, size_t size = ~size_t(0), size_t max_recv = RX_MAX_BYTES) {
         size_t bytes_received = 0;
-        socklen_t as = is_multicast_ ? sizeof(multicast_group_.sin_addr) : sizeof(peer_addr_);
-        sockaddr * sa = (sockaddr *) &peer_addr_;
+        socklen_t as = 0;
+        sockaddr * sa = nullptr;
 
+        if( socket_type_ == SocketTypeUDP ) {
+            as = is_multicast_ ? sizeof(multicast_group_.sin_addr) : sizeof(peer_addr_);
+            sa = (sockaddr *) &peer_addr_;
+        }
         // if size == 0 recv one chunk of any size
 
         for(;;) {
@@ -826,16 +901,7 @@ public:
             intptr_t r = 0;
 
             for(;;) {
-                switch( socket_type_ ) {
-                    case SocketTypeTCP  :
-                        r = ::recv(socket_, (char *) buffer, nb, socket_flags_);// MSG_WAITALL
-                        break;
-                    case SocketTypeUDP  :
-                        r = ::recvfrom(socket_, (char *) buffer, nb, socket_flags_, sa, &as);
-                        break;
-                    default:
-                        break;
-                }
+                r = ::recvfrom(socket_, (char *) buffer, nb, socket_flags_, sa, &as);
 
                 if( r != SocketError )
                     break;
@@ -916,27 +982,34 @@ public:
 
     size_t send(const void * buf, size_t size, size_t max_send = TX_MAX_BYTES) {
         size_t bytes_sent = 0;
-        socklen_t as = is_multicast_ ? sizeof(multicast_group_.sin_addr) : sizeof(remote_addr_);
-        const sockaddr * sa = (const sockaddr *) (is_multicast_ ? &multicast_group_ : &remote_addr_.saddr4);
+        socklen_t as = 0;
+        const sockaddr * sa = nullptr;
+        int flags = socket_flags_;
+
+        if( socket_type_ == SocketTypeUDP ) {
+            as = is_multicast_ ? sizeof(multicast_group_.sin_addr) : sizeof(remote_addr_);
+            sa = (const sockaddr *) (is_multicast_ ? &multicast_group_ : &remote_addr_.saddr4);
+        }
+        else {
+#ifdef MSG_NOSIGNAL
+            flags |= MSG_NOSIGNAL;
+#endif
+        }
 
         while( size > 0 ) {
             int nb = int(std::min(size, max_send));
             intptr_t w = 0;
 
             for(;;) {
-                switch( socket_type_ ) {
-                    case SocketTypeTCP  :
-                        w = ::send(socket_, (const char *) buf, nb, socket_flags_);
-                        break;
-                    case SocketTypeUDP  :
-                        w = ::sendto(socket_, (const char *) buf, nb, socket_flags_, sa, as);
-                        break;
-                    default :
-                        break;
-                }
+                w = ::sendto(socket_, (const char *) buf, nb, flags, sa, as);
 
                 if( w != SocketError )
                     break;
+
+#ifndef _WIN32
+                if( errno == EPIPE )
+                    break;
+#endif
 
                 if( translate_socket_error() != SocketInterrupted ) {
                     throw_socket_error();
@@ -1092,7 +1165,7 @@ public:
         return bRetVal;
     }
 
-    SocketErrors ocket_error() {
+    SocketErrors socket_error() {
         return socket_errno_;
     }
 
@@ -1349,6 +1422,10 @@ public:
                 container.emplace_back(socket_addr(*rp));
         }
 
+        std::sort(std::begin(container), std::end(container));
+        auto last = std::unique(std::begin(container), std::end(container));
+        container.erase(last, std::end(container));
+
         return container;
     }
 
@@ -1449,6 +1526,10 @@ public:
             }
 #endif
         }
+
+        std::sort(std::begin(container), std::end(container));
+        auto last = std::unique(std::begin(container), std::end(container));
+        container.erase(last, std::end(container));
 
         return container;
     }
@@ -1668,8 +1749,10 @@ protected:
             case ENOBUFS:
             case ENOMEM:
             case EPROTONOSUPPORT:
-            case EPIPE:
                 socket_errno_ = SocketInvalid;
+                break;
+            case EPIPE:
+                socket_errno_ = SocketEPipe;
                 break;
             case ECONNREFUSED :
                 socket_errno_ = SocketConnectionRefused;
@@ -1919,6 +2002,7 @@ public:
                     break;
 
             if( rp->ai_next == nullptr ) {
+                exceptions_ = exceptions_safe;
                 throw_translate_socket_error();
                 return *this;
             }
@@ -2412,7 +2496,7 @@ public:
 
     basic_socket_istream(basic_socket_streambuf<_Elem, _Traits> * sbuf) :
         std::basic_istream<_Elem, _Traits>(sbuf
-#if __GNUG__ > 5 || _MSC_VER
+#if _MSC_VER
             , std::ios::binary
 #endif
         )
@@ -2532,7 +2616,7 @@ public:
 
     basic_socket_ostream(basic_socket_streambuf<_Elem, _Traits> * sbuf) :
         std::basic_ostream<_Elem, _Traits>(sbuf
-#if __GNUG__ > 5 || _MSC_VER
+#if _MSC_VER
             , std::ios::binary
 #endif
         )
