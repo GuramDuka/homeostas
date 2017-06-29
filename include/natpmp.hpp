@@ -121,7 +121,7 @@ protected:
     struct PACKED public_address_response {
 		uint8_t  version;
 		uint8_t  op_code;
-		uint16_t result_code;
+        uint16_t result_code = ResultCodeInvalid;
 		uint32_t seconds;				// Seconds since port mapping table was initialized
         uint32_t addr;                  // Public IP Address
 	};

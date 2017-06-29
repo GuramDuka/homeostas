@@ -22,16 +22,12 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
-#if QT_CORE_LIB && __ANDROID__
+#if QT_CORE_LIB
 #   include <QString>
 #   include <QDebug>
 #   include <QUdpSocket>
 #   include <QPointer>
 #   include <QByteArray>
-#endif
-//------------------------------------------------------------------------------
-#ifndef NDEBUG
-#   include <fstream>
 #endif
 //------------------------------------------------------------------------------
 #include "natpmp.hpp"
@@ -73,27 +69,27 @@ void natpmp::worker()
 
     decltype(public_addr_) new_addr;
 
-//#if QT_CORE_LIB && __ANDROID__
-//    QPointer<QUdpSocket> qsocket = new QUdpSocket;
-//#endif
+#if QT_CORE_LIB
+    {
+        public_address_request req;
+        public_address_response resp;
+
+        QPointer<QUdpSocket> qsocket = new QUdpSocket;
+        QHostAddress remote;
+        remote.setAddress(gateway_.sock_data());
+        qsocket->writeDatagram((const char *) &req, sizeof(req), remote, gateway_.port());
+        QHostAddress sender;
+        quint16 senderPort;
+        qsocket->readDatagram((char *) &resp, sizeof(resp), &sender, &senderPort);
+    }
+#endif
 
     auto get_public_address = [&] {
         public_address_request req;
 
-//#if QT_CORE_LIB && __ANDROID__
-//        QHostAddress remote;
-//        remote.setAddress(gateway_.sock_data());
-//        qsocket->writeDatagram((const char *) &req, sizeof(req), remote, gateway_.port());
-//#else
         socket_->send(&req, sizeof(req));
-//#endif
 
         public_address_response resp;
-        resp.result_code = ResultCodeInvalid;
-
-//        QHostAddress sender;
-//        quint16 senderPort;
-//        qsocket->readDatagram((char *) &resp, sizeof(resp), &sender, &senderPort);
 
         if( socket_->select_rd(timeout_250ms) ) {
             socket_->recv(&resp, sizeof(resp));
