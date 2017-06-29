@@ -29,8 +29,11 @@
 //------------------------------------------------------------------------------
 #include "config.h"
 //------------------------------------------------------------------------------
-#if __GNUC__ >= 5
-#include <io.h>
+#if __MINGW32__
+#   include <io.h>
+#endif
+#if __linux__ && !__ANDROID__
+#   include <sys/io.h>
 #endif
 #include <functional>
 #include <string>

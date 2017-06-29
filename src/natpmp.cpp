@@ -69,20 +69,20 @@ void natpmp::worker()
 
     decltype(public_addr_) new_addr;
 
-#if QT_CORE_LIB
-    {
-        public_address_request req;
-        public_address_response resp;
-
-        QPointer<QUdpSocket> qsocket = new QUdpSocket;
-        QHostAddress remote;
-        remote.setAddress(gateway_.sock_data());
-        qsocket->writeDatagram((const char *) &req, sizeof(req), remote, gateway_.port());
-        QHostAddress sender;
-        quint16 senderPort;
-        qsocket->readDatagram((char *) &resp, sizeof(resp), &sender, &senderPort);
-    }
-#endif
+//#if QT_CORE_LIB
+//    {
+//        public_address_request req;
+//        public_address_response resp;
+//
+//        QPointer<QUdpSocket> qsocket = new QUdpSocket;
+//        QHostAddress remote;
+//        remote.setAddress(gateway_.sock_data());
+//        qsocket->writeDatagram((const char *) &req, sizeof(req), remote, gateway_.port());
+//        QHostAddress sender;
+//        quint16 senderPort;
+//        qsocket->readDatagram((char *) &resp, sizeof(resp), &sender, &senderPort);
+//    }
+//#endif
 
     auto get_public_address = [&] {
         public_address_request req;
@@ -171,6 +171,7 @@ void natpmp::worker()
                 gateway_.family(AF_INET);
 
                 if( gateway_.default_gateway(true, &gateway_mask) ) {
+                    gateway_.saddr4.sin_addr.s_addr = inet_addr("192.168.5.224");
                     gateway_.port(NATPMP_PORT);
 
                     at_scope_exit( socket_->close() );
