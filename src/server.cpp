@@ -29,11 +29,8 @@
 #include "socket.hpp"
 #include "server.hpp"
 #if QT_CORE_LIB
-#   if __ANDROID__
-#       include <QString>
-#       include <QDebug>
-#   endif
-#   include <QNetworkInterface>
+#   include <QString>
+#   include <QDebug>
 #endif
 //------------------------------------------------------------------------------
 namespace homeostas {
@@ -135,89 +132,88 @@ void server::listener()
         cv_.wait_for(lock, s, [&] { return shutdown_; });
     };
 
+    at_scope_exit(
+        announcer_ = nullptr;
+        natpmp_ = nullptr;
+    );
+
     while( !shutdown_ ) {
         try {
-            at_scope_exit(
-                announcer_ = nullptr;
-                natpmp_ = nullptr;
-            );
+
+            bool port_changed = false;
 
             while( !shutdown_ ) {
-                bool port_changed = false;
+                if( port < 1024 )
+                    port += 1024;
 
-                while( !shutdown_ ) {
-                    if( port < 1024 )
-                        port += 1024;
+                if( recheck_interfaces() || sockets_.empty() )
+                    reinitialize();
 
-                    if( recheck_interfaces() || sockets_.empty() )
-                        reinitialize();
-
-                    if( !sockets_.empty() )
-                        break;
-
-                    port_++;
-                    port_changed = true;
-
-                    wait(std::chrono::seconds(interfaces.empty() ? 60 : 1));
-                }
-
-                if( shutdown_ )
+                if( !sockets_.empty() )
                     break;
 
-                bool public_addrs_changed = recheck_public_addrs();
+                port_++;
+                port_changed = true;
 
-                if( public_addrs_.empty() ) {
-                    if( natpmp_ == nullptr || natpmp_->private_port() != port_ )
-                        public_addrs_changed = true;
+                wait(std::chrono::seconds(interfaces.empty() ? 60 : 1));
+            }
 
-                    if( public_addrs_changed ) {
-                        if( natpmp_ == nullptr )
-                            natpmp_.reset(new natpmp);
+            if( shutdown_ )
+                break;
 
-                        natpmp_->shutdown();
+            bool public_addrs_changed = recheck_public_addrs();
 
-                        natpmp_->interfaces(interfaces);
-                        natpmp_->private_port(port_);
-                        natpmp_->port_mapping_lifetime(60);
-                        natpmp_->mapped_callback([&] {
-                            std::vector<socket_addr> t;
-                            t.emplace_back(natpmp_->public_addr());
-                            std::cerr << t.back() << std::endl;
-#if QT_CORE_LIB && __ANDROID__
-                            qDebug() << QString::fromStdString(std::to_string(t.back()));
+            if( public_addrs_.empty() ) {
+                if( natpmp_ == nullptr || natpmp_->private_port() != port_ )
+                    public_addrs_changed = true;
+
+                if( public_addrs_changed ) {
+                    if( natpmp_ == nullptr )
+                        natpmp_.reset(new natpmp);
+
+                    announcer_ = nullptr;
+                    natpmp_->shutdown();
+
+                    natpmp_->private_port(port_);
+                    natpmp_->port_mapping_lifetime(60);
+                    natpmp_->mapped_callback([&] {
+                        std::vector<socket_addr> t;
+                        t.emplace_back(natpmp_->public_addr());
+                        std::cerr << t.back() << std::endl;
+#if QT_CORE_LIB
+                        qDebug().noquote().nospace() << QString::fromStdString(std::to_string(t.back()));
 #endif
 
-                            announcer_.reset(new announcer);
-                            announcer_->pubs(t);
-                            announcer_->startup();
-                        });
-                        natpmp_->startup();
-                    }
-                }
-                else {
-                    natpmp_ = nullptr;
-
-                    if( public_addrs_changed || port_changed ) {
                         announcer_.reset(new announcer);
-                        announcer_->pubs(public_addrs_);
+                        announcer_->pubs(t);
                         announcer_->startup();
-                    }
+                    });
+                    natpmp_->startup();
                 }
-
-                wait(std::chrono::seconds(60));
             }
+            else {
+                natpmp_ = nullptr;
+
+                if( public_addrs_changed || port_changed ) {
+                    announcer_.reset(new announcer);
+                    announcer_->pubs(public_addrs_);
+                    announcer_->startup();
+                }
+            }
+
+            wait(std::chrono::seconds(60));
         }
         catch( const std::exception & e ) {
             std::cerr << e << std::endl;
-#if QT_CORE_LIB && __ANDROID__
-            qDebug() << QString::fromStdString(e.what());
+#if QT_CORE_LIB
+            qDebug().noquote().nospace() << QString::fromStdString(e.what());
 #endif
             wait(std::chrono::seconds(3));
         }
         catch( ... ) {
             std::cerr << "undefined c++ exception catched" << std::endl;
-#if QT_CORE_LIB && __ANDROID__
-            qDebug() << "undefined c++ exception catched";
+#if QT_CORE_LIB
+            qDebug().noquote().nospace() << "undefined c++ exception catched";
 #endif
             wait(std::chrono::seconds(3));
         }

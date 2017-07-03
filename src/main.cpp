@@ -24,18 +24,77 @@
 //------------------------------------------------------------------------------
 #include "config.h"
 //------------------------------------------------------------------------------
+#include <QCoreApplication>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QFontDatabase>
+#include <QCommandLineParser>
+#include <QCommandLineOption>
+#include <QStringList>
+#ifdef Q_OS_ANDROID
+#   include <QtAndroidExtras/QtAndroid>
+#   include <QtAndroidExtras/QAndroidJniObject>
+#endif
 //------------------------------------------------------------------------------
 #include "config.h"
 #include "qobjects.hpp"
 //------------------------------------------------------------------------------
 int main(int argc, char ** argv)
 {
-    //qSetMessagePattern("[%{type}] %{file}, %{line}: %{message}");
+    bool daemon = false;
+
+    for( int i = 0; i < argc; i++ )
+        if( strcmp(argv[i], "--daemon") == 0 )
+            daemon = true;
+
     //homeostas::tests::run_tests();
+
+    at_scope_exit(
+        Homeostas::instance()->stopServer();
+        Homeostas::instance()->stopTrackers();
+    );
+
+    //qSetMessagePattern("[%{type}] %{file}, %{line}: %{message}");
+
+#ifdef Q_OS_ANDROID
+    auto logger = [] (const std::string & s) {
+        QAndroidJniObject::callStaticMethod<void>(
+            "org/homeostas/HomeostasService",
+            "logFromService",
+            "(Ljava/lang/String;)V",
+            QAndroidJniObject::fromString(QString::fromStdString(s)).object<jstring>());
+    };
+
+    if( daemon ) {
+        QCoreApplication app(argc, argv);
+
+        try {
+            Homeostas::instance()->startTrackers();
+            Homeostas::instance()->startServer();
+            logger("warmup");
+        }
+        catch( const std::exception & e ) {
+            logger(e.what());
+        }
+        catch( ... ) {
+            logger("undefined c++ exception catched");
+        }
+
+        return app.exec();
+    }
+#else
+    try {
+        Homeostas::instance()->startTrackers();
+        Homeostas::instance()->startServer();
+    }
+    catch( const std::exception & e ) {
+        qDebug().noquote().nospace() << e.what();
+    }
+    catch( ... ) {
+        qDebug().noquote().nospace() << "undefined c++ exception catched";
+    }
+#endif
 
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QGuiApplication app(argc, argv);
@@ -48,30 +107,16 @@ int main(int argc, char ** argv)
     engine.rootContext()->setContextProperty("homeostas", Homeostas::instance());
     engine.rootContext()->setContextProperty("directoriesTrackersModel", DirectoriesTrackersModel::instance());
 
-    at_scope_exit(
-        Homeostas::instance()->stopServer();
-        Homeostas::instance()->stopTrackers();
-    );
-
-    try {
-        Homeostas::instance()->startTrackers();
-        Homeostas::instance()->startServer();
-    }
-    catch( const std::exception & e ) {
-        std::cerr << e << std::endl;
-#if QT_CORE_LIB && __ANDROID__
-        qDebug() << QString::fromStdString(e.what());
-#endif
-    }
-    catch( ... ) {
-        std::cerr << "undefined c++ exception catched" << std::endl;
-#if QT_CORE_LIB && __ANDROID__
-        qDebug() << "undefined c++ exception catched";
-#endif
-    }
-
     QFontDatabase::addApplicationFont(QLatin1String(":/digital-7-mono"));
     engine.load(QUrl("qrc:/main.qml"));
+
+#ifdef Q_OS_ANDROID
+    QAndroidJniObject::callStaticMethod<void>(
+        "org/homeostas/HomeostasService",
+        "startHomeostasService",
+        "(Landroid/content/Context;)V",
+        QtAndroid::androidActivity().object());
+#endif
 
     return app.exec();
 }

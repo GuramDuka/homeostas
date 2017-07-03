@@ -14,9 +14,9 @@ win32 {
     LIBS += -lws2_32 -liphlpapi -ladvapi32
     RC_FILE = homeostas.rc
     DISTFILES += homeostas.rc
-    CONFIG(debug, debug|release) {
-        CONFIG += console
-    }
+    #CONFIG(debug, debug|release) {
+    #    CONFIG += console
+    #}
 }
 
 unix {
@@ -38,6 +38,8 @@ unix {
 }
 
 android {
+    QT += androidextras
+
     isEmpty(QMAKE_CFLAGS_OPTIMIZE_FULL): QMAKE_CFLAGS_OPTIMIZE_FULL = -O3
     isEmpty(QMAKE_CXXFLAGS_OPTIMIZE_FULL): QMAKE_CXXFLAGS_OPTIMIZE_FULL = -O3
 
@@ -68,7 +70,9 @@ DISTFILES += \
     android/build.gradle \
     android/res/drawable-hdpi/icon.png \
     android/res/drawable-ldpi/icon.png \
-    android/res/drawable-mdpi/icon.png
+    android/res/drawable-mdpi/icon.png \
+    android/src/HomeostasBroadcastReceiver.java \
+    android/src/HomeostasService.java
 
 ANDROID_PACKAGE_SOURCE_DIR = $$PWD/android
 

@@ -527,7 +527,11 @@ homeostas::socket_addr & from_string(homeostas::socket_addr & a, const std::basi
 
     hints.ai_family     = a.storage.ss_family;
     hints.ai_socktype   = 0;
-    hints.ai_flags      = AI_ALL;   // For wildcard IP address
+    hints.ai_flags      = (AI_ALL | AI_ADDRCONFIG)
+#if AI_MASK
+        & AI_MASK
+#endif
+    ;
     hints.ai_protocol   = 0;        // Any protocol
     hints.ai_canonname  = nullptr;
     hints.ai_addr       = nullptr;
@@ -721,7 +725,7 @@ public:
         return *this;
     }
 
-    bool select(fd_set * p_read_fds, fd_set * p_write_fds, fd_set * p_except_fds, uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
+    bool select(fd_set * p_read_fds, fd_set * p_write_fds, fd_set * p_except_fds, uint64_t timeout_ns = std::numeric_limits<uint64_t>::max(), uint64_t * p_ellapsed = nullptr) {
         uint64_t started = p_ellapsed != nullptr ? clock_gettime_ns() : 0;
 #if _WIN32 || _POSIX_C_SOURCE < 200112L
         timeval * p_timeout = nullptr, timeout;
@@ -737,6 +741,9 @@ public:
             timeout.tv_sec = decltype(timeout.tv_sec) (timeout_ns / 1000000000u);
 #if _WIN32 || _POSIX_C_SOURCE < 200112L
             timeout.tv_usec = decltype(timeout.tv_usec) ((timeout_ns % 1000000000u) / 1000u);
+
+            if( timeout.tv_sec == 0 && timeout.tv_usec == 0 && timeout_ns != 0 )
+                timeout.tv_usec = 1;
 #else
             timeout.tv_nsec = decltype(timeout.tv_nsec) (timeout_ns % 1000000000u);
 #endif
@@ -782,81 +789,73 @@ public:
         return r;
     }
 
-    bool select_rd(uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
-#if _WIN32
+#if __linux__
+    bool poll(uint64_t timeout_ns, uint64_t * p_ellapsed, decltype(pollfd::events) pool_event) {
+        uint64_t started = p_ellapsed != nullptr ? clock_gettime_ns() : 0;
+        pollfd pfd = { socket_, pool_event, 0 };
+#   if __ANDROID__
+        int ms = timeout_ns == std::numeric_limits<uint64_t>::max() ?
+            std::numeric_limits<int>::min() : int(timeout_ns / (1000u * 1000u));
+
+        if( ms == 0 && timeout_ns != 0 )
+            ms = 1;
+
+        int r = ::poll(&pfd, 1, ms);
+#   else
+        timespec * p_timeout = nullptr, timeout;
+
+        if( timeout_ns != ~uint64_t(0) ) {
+            timeout.tv_sec = decltype(timeout.tv_sec) (timeout_ns / 1000000000u);
+            timeout.tv_nsec = decltype(timeout.tv_nsec) (timeout_ns % 1000000000u);
+            p_timeout = &timeout;
+        }
+
+        int r = ppoll(&pfd, 1, p_timeout, nullptr);
+#   endif
+
+        switch( r ) {
+            case  0 : // timeout
+                break;
+            default :
+                if( (pfd.revents & POLLNVAL) == 0 )
+                    return true;
+                errno = EBADF;
+                // FALLTHROUGH
+            case -1 : // error
+                throw_translate_socket_error();
+                break;
+        }
+
+        if ( p_ellapsed != nullptr )
+            *p_ellapsed = clock_gettime_ns() - started;
+
+        return false;
+    }
+#endif
+
+    bool select_rd(uint64_t timeout_ns = std::numeric_limits<uint64_t>::max(), uint64_t * p_ellapsed = nullptr) {
+#if __linux__
+        return poll(timeout_ns, p_ellapsed, POLLIN);
+#else
         fd_set fds;
 
         FD_ZERO(&fds);
         FD_SET(socket_, &fds);
 
         return select(&fds, nullptr, nullptr, timeout_ns, p_ellapsed);
-#else
-        uint64_t started = p_ellapsed != nullptr ? clock_gettime_ns() : 0;
-        pollfd pfd = { socket_, POLLIN, 0 };
-        timespec * p_timeout = nullptr, timeout;
-
-        if( timeout_ns != ~uint64_t(0) ) {
-            timeout.tv_sec = decltype(timeout.tv_sec) (timeout_ns / 1000000000u);
-            timeout.tv_nsec = decltype(timeout.tv_nsec) (timeout_ns % 1000000000u);
-            p_timeout = &timeout;
-        }
-
-        switch( ppoll(&pfd, 1, p_timeout, nullptr) ) {
-            case  0 : // timeout
-                break;
-            default :
-                if( (pfd.revents & POLLNVAL) == 0 )
-                    return true;
-                errno = EBADF;
-                // FALLTHROUGH
-            case -1 : // error
-                throw_translate_socket_error();
-                break;
-        }
-
-        if ( p_ellapsed != nullptr )
-            *p_ellapsed = clock_gettime_ns() - started;
-
-        return false;
 #endif
     }
 
-    bool select_wr(uint64_t timeout_ns = ~uint64_t(0), uint64_t * p_ellapsed = nullptr) {
-#if _WIN32
+    bool select_wr(uint64_t timeout_ns = std::numeric_limits<uint64_t>::max(), uint64_t * p_ellapsed = nullptr) {
+#if __linux__
+        return poll(timeout_ns, p_ellapsed, POLLOUT);
+#else
         fd_set fds;
 
         FD_ZERO(&fds);
         FD_SET(socket_, &fds);
 
         return select(nullptr, &fds, nullptr, timeout_ns, p_ellapsed);
-#else
-        uint64_t started = p_ellapsed != nullptr ? clock_gettime_ns() : 0;
-        pollfd pfd = { socket_, POLLOUT, 0 };
-        timespec * p_timeout = nullptr, timeout;
-
-        if( timeout_ns != ~uint64_t(0) ) {
-            timeout.tv_sec = decltype(timeout.tv_sec) (timeout_ns / 1000000000u);
-            timeout.tv_nsec = decltype(timeout.tv_nsec) (timeout_ns % 1000000000u);
-            p_timeout = &timeout;
-        }
-
-        switch( ppoll(&pfd, 1, p_timeout, nullptr) ) {
-            case  0 : // timeout
-                break;
-            default :
-                if( (pfd.revents & POLLNVAL) == 0 )
-                    return true;
-                errno = EBADF;
-                // FALLTHROUGH
-            case -1 : // error
-                throw_translate_socket_error();
-                break;
-        }
-
-        if ( p_ellapsed != nullptr )
-            *p_ellapsed = clock_gettime_ns() - started;
-
-        return false;
 #endif
     }
 
@@ -1005,11 +1004,6 @@ public:
 
                 if( w != SocketError )
                     break;
-
-#ifndef _WIN32
-                if( errno == EPIPE )
-                    break;
-#endif
 
                 if( translate_socket_error() != SocketInterrupted ) {
                     throw_socket_error();
@@ -1942,10 +1936,14 @@ public:
         addrinfo hints, * result, * rp;
 
         memset(&hints, 0, sizeof(addrinfo));
-        hints.ai_family     = socket_domain_; // Allow IPv4 or IPv6
-        hints.ai_socktype   = socket_type_;
-        hints.ai_flags      = AI_ALL;
-        hints.ai_protocol   = socket_proto_;
+        hints.ai_family     = socket_domain_ == SocketDomainInvalid ? 0 : socket_domain_; // Allow IPv4 or IPv6
+        hints.ai_socktype   = socket_type_ == SocketTypeInvalid ? 0 : socket_type_;
+        hints.ai_flags      = (AI_ALL | AI_ADDRCONFIG)
+#if AI_MASK
+            & AI_MASK
+#endif
+        ;
+        hints.ai_protocol   = socket_proto_ == SocketProtoInvalid ? 0 : socket_proto_;
         hints.ai_canonname  = nullptr;
         hints.ai_addr       = nullptr;
         hints.ai_next       = nullptr;
@@ -1954,7 +1952,7 @@ public:
 
         if( r != 0 ) {
             socket_errno_ = SocketEUnknown;
-            throw_socket_error(
+            auto e =
                 std::string(str_error()) + ", " +
 #if _WIN32
 #   if QT_CORE_LIB
@@ -1965,7 +1963,8 @@ public:
 #else
                 gai_strerror(r)
 #endif
-            );
+            ;
+            throw_socket_error(e);
             return *this;
         }
 

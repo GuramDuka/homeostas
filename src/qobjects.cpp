@@ -22,10 +22,11 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
-#if QT_CORE_LIB && __ANDROID__
+#if QT_CORE_LIB
 #   include <QString>
 #   include <QtDebug>
 #endif
+#include <iterator>
 //------------------------------------------------------------------------------
 #include "locale_traits.hpp"
 #include "cdc512.hpp"
@@ -66,11 +67,20 @@ QString Homeostas::newUniqueId()
             entropy.push_back(q);
     }
 
-    homeostas::cdc512 ctx;
-    ctx.generate_entropy(&entropy);
+    auto sz = entropy.size();
 
-    return QString::fromStdString(
-        std::blob2string(std::blob(std::begin(ctx), std::end(ctx))));
+    for(;;) {
+        homeostas::cdc512 ctx;
+        ctx.generate_entropy(&entropy);
+
+        auto s = std::blob2string(std::blob(std::begin(ctx), std::end(ctx)));
+        auto p = std::begin(s) + s.rfind('-') + 1;
+
+        if( std::distance(p, std::end(s)) >= 9 )
+            return QString::fromStdString(s);
+
+        entropy.resize(sz);
+    }
 }
 //------------------------------------------------------------------------------
 void Homeostas::startServer()
@@ -106,9 +116,9 @@ void Homeostas::startTrackers()
 
     std::cerr << "private_id: " << std::blob2string(config->get("host.private_id").get<std::blob>()) << std::endl;
     std::cerr << "public_id : " << std::blob2string(config->get("host.public_id").get<std::blob>()) << std::endl;
-#if QT_CORE_LIB && __ANDROID__
-    qDebug().noquote() << "private_id: " << QString::fromStdString(std::blob2string(config->get("host.private_id").get<std::blob>()));
-    qDebug().noquote() << "public_id : " << QString::fromStdString(std::blob2string(config->get("host.public_id").get<std::blob>()));
+#if QT_CORE_LIB
+    qDebug().noquote().nospace() << "private_id: " << QString::fromStdString(std::blob2string(config->get("host.private_id").get<std::blob>()));
+    qDebug().noquote().nospace() << "public_id : " << QString::fromStdString(std::blob2string(config->get("host.public_id").get<std::blob>()));
 #endif
 
 #ifndef NDEBUG

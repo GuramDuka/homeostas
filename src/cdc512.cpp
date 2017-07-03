@@ -263,7 +263,7 @@ void cdc512::generate_entropy(std::vector<uint8_t> * p_entropy)
 //---------------------------------------------------------------------------
 std::string cdc512::generate_prime()
 {
-    std::stringstream s;
+    std::ostringstream s;
 
     s.fill('0');
     //s.width(2);

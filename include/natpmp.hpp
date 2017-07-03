@@ -100,15 +100,6 @@ public:
     const auto & gateway() const {
         return gateway_;
     }
-
-    const std::vector<socket_addr> & interfaces() const {
-        return interfaces_;
-    }
-
-    auto & interfaces(const std::vector<socket_addr> & ifs) {
-        interfaces_ = ifs;
-        return *this;
-    }
 protected:
 #if _WIN32
 #   pragma pack(1)
@@ -138,7 +129,7 @@ protected:
     struct PACKED new_port_mapping_response {
 		uint8_t  version;
 		uint8_t  op_code;				// OP Code = 129 for UDP or 130 for TCP
-		uint16_t result_code;
+        uint16_t result_code;
 		uint32_t seconds;				// Seconds since port mapping table was initialized
 		uint16_t private_port;
 		uint16_t mapped_public_port;	// Mapped public port
@@ -180,7 +171,6 @@ protected:
 
     std::function<void()> mapped_callback_;
 
-    std::vector<socket_addr> interfaces_;
     socket_addr gateway_;
     socket_addr public_addr_;
 

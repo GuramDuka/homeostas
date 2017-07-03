@@ -22,6 +22,10 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
+#if QT_CORE_LIB
+#   include <QString>
+#   include <QDebug>
+#endif
 #include <string>
 //------------------------------------------------------------------------------
 #include "announcer.hpp"
@@ -32,12 +36,12 @@ namespace homeostas {
 //------------------------------------------------------------------------------
 void announcer::worker()
 {
-    for(;;) {
+    while( !shutdown_ ) {
         try {
             at_scope_exit( socket_->close() );
 
             std::string host = "enosys.rf.gd", service = "http";
-            host    = "127.0.0.1";
+            host    = "192.168.5.69";
             service = "65480";
 
             socket_->connect(host, service);
@@ -82,25 +86,35 @@ void announcer::worker()
             std::string resp;
             ss >> resp;
 
-            if( content_length != resp.size() )
+            if( content_length != resp.size() ) {
                 std::cerr << "invalid content length" << std::endl;
+#if QT_CORE_LIB
+                qDebug().noquote().nospace() << "invalid content length";
+#endif
+            }
 
             std::cerr << resp << std::endl;
+#if QT_CORE_LIB
+            qDebug().noquote().nospace() << QString::fromStdString(resp);
+#endif
 
             break;
         }
         catch( const std::exception & e ) {
             std::cerr << e << std::endl;
+#if QT_CORE_LIB
+            qDebug().noquote().nospace() << QString::fromStdString(e.what());
+#endif
         }
         catch( ... ) {
             std::cerr << "undefined c++ exception catched" << std::endl;
+#if QT_CORE_LIB
+            qDebug().noquote().nospace() << "undefined c++ exception catched";
+#endif
         }
 
         std::unique_lock<std::mutex> lock(mtx_);
         cv_.wait_for(lock, std::chrono::seconds(60), [&] { return shutdown_; });
-
-        if( shutdown_ )
-            break;
     }
 }
 //------------------------------------------------------------------------------
