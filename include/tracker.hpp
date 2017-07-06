@@ -41,23 +41,33 @@ namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-class directory_tracker {
+class directory_tracker_interface {
 public:
-    ~directory_tracker() {
-        shutdown();
+    directory_tracker_interface() {}
+
+    directory_tracker_interface(const directory_tracker_interface & o) {
+        *this = o;
     }
 
-    /*directory_tracker(directory_tracker && o) {
+    directory_tracker_interface(directory_tracker_interface && o) {
         *this = std::move(o);
     }
 
-    directory_tracker & operator = (directory_tracker && o) {
+    directory_tracker_interface & operator = (const directory_tracker_interface & o) {
+        dir_user_defined_name_ = o.dir_user_defined_name_;
+        dir_path_name_ = o.dir_path_name_;
         return *this;
-    }*/
+    }
 
-    directory_tracker() {}
+    directory_tracker_interface & operator = (directory_tracker_interface && o) {
+        if( this != &o ) {
+            dir_user_defined_name_ = std::move(o.dir_user_defined_name_);
+            dir_path_name_ = std::move(o.dir_path_name_);
+        }
+        return *this;
+    }
 
-    directory_tracker(
+    directory_tracker_interface(
         const std::string & dir_user_defined_name,
         const std::string & dir_path_name) :
         dir_user_defined_name_(dir_user_defined_name),
@@ -80,6 +90,26 @@ public:
         dir_path_name_ = dir_path_name;
         return *this;
     }
+protected:
+    std::string dir_user_defined_name_;
+    std::string dir_path_name_;
+private:
+};
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+class directory_tracker : public directory_tracker_interface {
+public:
+    ~directory_tracker() {
+        shutdown();
+    }
+
+    directory_tracker() {}
+
+    directory_tracker(
+        const std::string & dir_user_defined_name,
+        const std::string & dir_path_name) :
+            directory_tracker_interface(dir_user_defined_name, dir_path_name) {}
 
     const auto & oneshot() const {
         return oneshot_;
@@ -99,8 +129,6 @@ public:
 protected:
     void worker();
 
-    std::string dir_user_defined_name_;
-    std::string dir_path_name_;
     std::string db_name_;
     std::string db_path_;
     std::string db_path_name_;
@@ -115,6 +143,18 @@ protected:
 private:
     directory_tracker(const directory_tracker &);
     void operator = (const directory_tracker &);
+};
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+class directory_tracker_proxy : protected directory_tracker_interface {
+public:
+};
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+class directory_trackers_proxy : protected std::vector<directory_tracker_proxy> {
+public:
 };
 //------------------------------------------------------------------------------
 namespace tests {

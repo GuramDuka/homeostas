@@ -34,13 +34,17 @@
 #include <iomanip>
 #include <stdexcept>
 #include <exception>
+#include <array>
 #include <vector>
 #include <cctype>
 #include <locale>
 #include <cerrno>
+#include <iterator>
 #if QT_CORE_LIB
 #   include <QString>
 #endif
+//------------------------------------------------------------------------------
+#include "numeric/ii.hpp"
 //------------------------------------------------------------------------------
 namespace std {
 //------------------------------------------------------------------------------
@@ -52,6 +56,53 @@ constexpr const T & xmin(const T & a, const T & b) {
 template <typename T> inline
 constexpr const T & xmax(const T & a, const T & b) {
     return a > b ? a : b;
+}
+//------------------------------------------------------------------------------
+template <class InputIt, class OutputIt> inline
+OutputIt copy(InputIt first, InputIt last,
+                   OutputIt d_first, OutputIt d_last)
+{
+    while( first != last && d_first != d_last )
+        *d_first++ = (decltype(*d_first)) (*first++);
+
+    return d_first;
+}
+//------------------------------------------------------------------------------
+template <class InputIt, class OutputIt, class InserterIt> inline
+OutputIt copy(InputIt first, InputIt last,
+                   OutputIt d_first, OutputIt d_last, InserterIt inserter)
+{
+    while( first != last && d_first != d_last )
+        *d_first++ = (decltype(*d_first)) (*first++);
+    while( first != last )
+        *inserter++ = (decltype(*inserter)) (*first++);
+
+    return d_first;
+}
+//------------------------------------------------------------------------------
+template <class InputIt, class OutputIt, class UnaryOperation> inline
+OutputIt transform(InputIt first, InputIt last,
+                   OutputIt d_first, OutputIt d_last,
+                   UnaryOperation unary_op)
+{
+    while( first != last && d_first != d_last )
+        *d_first++ = unary_op(*first++);
+
+    return d_first;
+}
+//------------------------------------------------------------------------------
+template <class InputIt, class OutputIt, class InserterIt, class UnaryOperation> inline
+OutputIt transform(InputIt first, InputIt last,
+                   OutputIt d_first, OutputIt d_last,
+                   InserterIt inserter,
+                   UnaryOperation unary_op)
+{
+    while( first != last && d_first != d_last )
+        *d_first++ = unary_op(*first++);
+    while( first != last )
+        *inserter++ = unary_op(*first++);
+
+    return d_first;
 }
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
@@ -345,12 +396,14 @@ void stream_copy_n(std::ostream & out, std::istream & in, const size_type & size
 		size_type r = count > buffer_size ? size_type(buffer_size) : count;
 
 		in.read(buffer, r);
-		//if( in.bad() || in.gcount() != r )
-        //	throw std::xruntime_error("stream read error");
+
+        if( in.gcount() == 0 || in.eof() || in.fail() || in.bad() )
+            break;
 
 		out.write(buffer, r);
-		//if( out.bad() )
-        //	throw std::xruntime_error("stream write error");
+
+        if( out.eof() || out.fail() || out.bad() )
+            break;
 
 		count -= r;
 	}
@@ -362,7 +415,7 @@ void copy_eof(std::ostream & out, std::istream & in) {
 
 	for(;;) {
 		in.read(buffer, buffer_size);
-		std::size_t r = in.gcount();
+        auto r = in.gcount();
 		out.write(buffer, r);
 
 		if( in.eof() )
@@ -527,6 +580,292 @@ inline std::string to_string_ellapsed(uint64_t ns) {
     return s.str();
 }
 //------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+template <typename T>
+class ptr_iterator : public iterator<random_access_iterator_tag, T> {
+public:
+#if __GNUG__
+    typedef typename iterator<random_access_iterator_tag, T>::pointer pointer;
+    typedef typename iterator<random_access_iterator_tag, T>::reference reference;
+    typedef typename iterator<random_access_iterator_tag, T>::difference_type difference_type;
+    typedef typename iterator<random_access_iterator_tag, T>::value_type value_type;
+#endif
+    typedef ptr_iterator<T> iterator;
+
+    ~ptr_iterator() {}
+    ptr_iterator() : ptr_(nullptr) {}
+    ptr_iterator(T * ptr) : ptr_(ptr) {}
+
+    iterator  operator++(int)                       { return ptr_++; }        // postfix
+    iterator& operator++()                          { ++ptr_; return *this; } // prefix
+    reference operator* () const                    { return *ptr_; }
+    pointer   operator->() const                    { return ptr_; }
+    iterator  operator+ (difference_type v)   const { return ptr_ + v; }
+    iterator  operator- (difference_type v)   const { return ptr_ - v; }
+    iterator& operator+=(difference_type v)   const { return ptr_ += v; }
+    iterator& operator-=(difference_type v)   const { return ptr_ -= v; }
+    bool      operator==(const iterator& rhs) const { return ptr_ == rhs.ptr_; }
+    bool      operator!=(const iterator& rhs) const { return ptr_ != rhs.ptr_; }
+    bool      operator>=(const iterator& rhs) const { return ptr_ >= rhs.ptr_; }
+    bool      operator<=(const iterator& rhs) const { return ptr_ <= rhs.ptr_; }
+    bool      operator> (const iterator& rhs) const { return ptr_ >  rhs.ptr_; }
+    bool      operator< (const iterator& rhs) const { return ptr_ <  rhs.ptr_; }
+
+    difference_type operator - (const iterator & v) const { return ptr_ - v.ptr_; }
+
+    pointer get() const {
+        ptr_;
+    }
+protected:
+    pointer ptr_;
+};
+//------------------------------------------------------------------------------
+//template <typename T> inline
+//ptr_iterator<T> begin(T * val, int) {
+//    return ptr_iterator<T>(val);
+//}
+//------------------------------------------------------------------------------
+//template <typename T> inline
+//ptr_iterator<T> end(T * val, int) {
+//    return ptr_iterator<T>(val);
+//}
+//------------------------------------------------------------------------------
+template <typename T>
+class ptr_range {
+public:
+    typedef typename ptr_iterator<T>::iterator iterator;
+    typedef typename ptr_iterator<T>::pointer pointer;
+    typedef typename ptr_iterator<T>::reference reference;
+    typedef typename ptr_iterator<T>::difference_type difference_type;
+    typedef typename ptr_iterator<T>::value_type value_type;
+
+    ptr_range(pointer ptr, difference_type size) : ptr_(ptr), end_(ptr + size) {}
+
+    template <typename ItT,
+        typename std::enable_if<
+            std::is_same<ItT, ptr_iterator<typename ItT::value_type>>::value
+        >::type * = nullptr
+    >
+    ptr_range(ItT first, ItT last) : ptr_(first.get()), end_(last.get()) {}
+
+    iterator begin() const {
+        return ptr_;
+    }
+
+    iterator begin() {
+        return ptr_;
+    }
+
+    iterator end() const {
+        return end_;
+    }
+
+    iterator end() {
+        return end_;
+    }
+
+    pointer get() const {
+        return ptr_;
+    }
+protected:
+    pointer ptr_;
+    pointer end_;
+};
+//------------------------------------------------------------------------------
+template <typename T> inline
+ptr_range<T> make_range(T * ptr, size_t length) {
+    return ptr_range<T>(ptr, length);
+}
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+struct shuffler512 {
+    uint64_t a, b, c, d, e, f, g, h;
+
+    void shuffle(const shuffler512 & v) {
+#if BYTE_ORDER == LITTLE_ENDIAN
+        a -= v.e; f ^= v.h >>  9; h += v.a;
+        b -= v.f; g ^= v.a <<  9; a += v.b;
+        c -= v.g; h ^= v.b >> 23; b += v.c;
+        d -= v.h; a ^= v.c << 15; c += v.d;
+        e -= v.a; b ^= v.d >> 14; d += v.e;
+        f -= v.b; c ^= v.e << 20; e += v.f;
+        g -= v.c; d ^= v.f >> 17; f += v.g;
+        h -= v.d; e ^= v.g << 14; g += v.h;
+#endif
+#if BYTE_ORDER == BIG_ENDIAN
+        a = le64toh(a) - le64toh(v.e); f = le64toh(f) ^ (le64toh(v.h) >>  9); h = le64toh(h) + le64toh(v.a);
+        b = le64toh(b) - le64toh(v.f); g = le64toh(g) ^ (le64toh(v.a) <<  9); a = le64toh(a) + le64toh(v.b);
+        c = le64toh(c) - le64toh(v.g); h = le64toh(h) ^ (le64toh(v.b) >> 23); b = le64toh(b) + le64toh(v.c);
+        d = le64toh(d) - le64toh(v.h); a = le64toh(a) ^ (le64toh(v.c) << 15); c = le64toh(c) + le64toh(v.d);
+        e = le64toh(e) - le64toh(v.a); b = le64toh(b) ^ (le64toh(v.d) >> 14); d = le64toh(d) + le64toh(v.e);
+        f = le64toh(f) - le64toh(v.b); c = le64toh(c) ^ (le64toh(v.e) << 20); e = le64toh(e) + le64toh(v.f);
+        g = le64toh(g) - le64toh(v.c); d = le64toh(d) ^ (le64toh(v.f) >> 17); f = le64toh(f) + le64toh(v.g);
+        h = le64toh(h) - le64toh(v.d); e = le64toh(e) ^ (le64toh(v.g) << 14); g = le64toh(g) + le64toh(v.h);
+#endif
+    }
+};
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+class key512 : public array<uint8_t, 64> {
+public:
+    typedef array<uint8_t, 64> base;
+
+    static constexpr size_type ssize() noexcept { return 64; }
+
+    key512() : base() {}
+
+    key512(const key512 & o) : base(o) {}
+    //digest(digest && o) : base(o) {}
+
+    key512(const ptr_range<uint8_t> & range) {
+        std::copy(std::begin(range), std::end(range), begin(), end());
+    }
+
+    template <size_t _Size>
+    key512(const uint8_t (&o) [_Size]) {
+        std::copy(std::begin(o), std::end(o), begin(), end());
+    }
+
+    template <size_t _Size>
+    key512 & operator = (const uint8_t (&o) [_Size]) {
+        std::copy(std::begin(o), std::end(o), begin(), end());
+        return *this;
+    }
+
+    key512 & operator = (const key512 & o) {
+        base::operator = (o);
+        return *this;
+    }
+
+    key512 & operator = (key512 && o) {
+        base::operator = (o);
+        return *this;
+    }
+
+    bool operator == (const key512 & o) const {
+        auto s = reinterpret_cast<const uint64_t *>(data());
+        auto d = reinterpret_cast<const uint64_t *>(o.data());
+        return s[0] == d[0] && s[1] == d[1] && s[2] == d[2] && s[3] == d[3] && s[4] == d[4] && s[5] == d[5] && s[6] == d[6] && s[7] == d[7];
+    }
+
+    bool operator != (const key512 & o) const {
+        auto s = reinterpret_cast<const uint64_t *>(data());
+        auto d = reinterpret_cast<const uint64_t *>(o.data());
+        return s[0] != d[0] && s[1] != d[1] && s[2] != d[2] && s[3] != d[3] && s[4] != d[4] && s[5] != d[5] && s[6] != d[6] && s[7] != d[7];
+    }
+
+    bool is_zero() const {
+        auto d = reinterpret_cast<const uint64_t *>(data());
+        return d[0] == 0 && d[1] == 0 && d[2] == 0 && d[3] == 0 && d[4] == 0 && d[5] == 0 && d[6] == 0 && d[7] == 0;
+    }
+
+    void shuffle() {
+        reinterpret_cast<shuffler512 *>(data())->shuffle(*reinterpret_cast<const shuffler512 *>(data()));
+    }
+
+    void shuffle(const key512 & v) {
+        reinterpret_cast<shuffler512 *>(data())->shuffle(*reinterpret_cast<const shuffler512 *>(v.data()));
+    }
+
+    void shuffle(const shuffler512 & v) {
+        reinterpret_cast<shuffler512 *>(data())->shuffle(v);
+    }
+
+    template <size_t _Size>
+    void shuffle(const uint8_t (&v) [_Size]) {
+        static_assert( _Size == 64, "_Size == 64");
+        reinterpret_cast<shuffler512 *>(data())->shuffle(*reinterpret_cast<const shuffler512 *>(v));
+    }
+};
+//------------------------------------------------------------------------------
+inline std::string to_string(
+    const key512 & b,
+    const char * abc = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    char delimiter = '-',
+    size_t interval = 9)
+{
+    std::string s;
+    size_t l = ::strlen(abc), i = 0;
+
+    nn::integer a(b.data(), b.size()), d = l, mod;
+
+    while( a.is_notz() ) {
+        a = a.div(l, &mod);
+        s.push_back(abc[size_t(mod)]);
+
+        if( delimiter != '\0' && interval != 0 && ++i == interval ) {
+            s.push_back(delimiter);
+            i = 0;
+        }
+    }
+
+    if( delimiter != '\0' && interval != 0 && s.back() == delimiter )
+        s.pop_back();
+
+    return s;
+}
+//---------------------------------------------------------------------------
+inline key512 stokey512(const std::string & s,
+    const char * abc = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+{
+    size_t l = ::strlen(abc);
+    nn::integer a(0), m(1);
+
+    for( const auto & c : s ) {
+        const char * p = ::strchr(abc, c);
+
+        if( p == nullptr )
+            continue;
+
+        a += m * nn::integer(p - abc);
+        m *= l;
+    }
+
+    return key512(std::make_range((uint8_t *) a.data(), a.size()));
+}
+//---------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+class blob : public vector<uint8_t> {
+public:
+    typedef vector<uint8_t> base;
+    typedef typename base::value_type value_type;
+    typedef typename base::allocator_type allocator_type;
+
+    blob() : base() {}
+
+    blob(const blob & o) : base(o) {}
+    blob(blob && o) : base(o) {}
+
+    blob & operator = (const blob & o) {
+        base::operator = (o);
+        return *this;
+    }
+
+    blob & operator = (blob && o) {
+        base::operator = (o);
+        return *this;
+    }
+};
+//------------------------------------------------------------------------------
+inline string blob2hex(const blob & b)
+{
+    ostringstream s;
+
+    s.fill('0');
+    s.width(2);
+    s.unsetf(ios::dec);
+    s.setf(ios::hex | ios::uppercase);
+
+    for( const auto & c : b )
+        s << /*setw(2) <<*/ uint16_t(c);
+
+    return s.str();
+}
+//---------------------------------------------------------------------------
 } // namespace std
 //------------------------------------------------------------------------------
 #endif // STD_EXT_HPP_INCLUDED

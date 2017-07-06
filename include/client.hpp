@@ -29,41 +29,55 @@
 //------------------------------------------------------------------------------
 #include "config.h"
 //------------------------------------------------------------------------------
+#include <future>
+#include <functional>
 #include <thread>
 #include <mutex>
 #include <atomic>
 #include <condition_variable>
-#include <QPointer>
-#include <QTcpSocket>
-#include <QHostAddress>
 //------------------------------------------------------------------------------
-#include "tracker.hpp"
+#include "socket_stream.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-class client : protected QTcpSocket {
-    private:
-        QPointer<QTcpSocket> socket_;
-        std::unique_ptr<std::thread> thread_;
-        std::mutex mtx_;
-        std::condition_variable cv_;
-        bool shutdown_;
+class client {
+public:
+    ~client() {
+        shutdown();
+    }
 
-        void worker();
-    protected:
-    public:
-        ~client() {
-            shutdown();
-        }
+    static auto instance() {
+        static client singleton;
+        return &singleton;
+    }
 
-        bool started() const {
-            return thread_ != nullptr;
-        }
+    void startup();
+    void shutdown();
 
-        void startup();
-        void shutdown();
+    template <class F, class... Args>
+    auto enqueue(F&& f, Args&&... args)
+        -> std::future<typename std::result_of<F(Args...)>::type>
+    {
+        using return_type = typename std::result_of<F(Args...)>::type;
+        auto task = std::make_shared<std::packaged_task<return_type()> >(
+            std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+        std::future<return_type> res = task->get_future();
+
+        task_ = [task] { (*task)(); };
+
+        return res;
+    }
+    
+protected:
+    std::function<void()> task_;
+    std::unique_ptr<active_socket> socket_;
+    std::mutex mtx_;
+    std::condition_variable cv_;
+    bool shutdown_;
+
+    void worker();
 };
 //------------------------------------------------------------------------------
 namespace tests {

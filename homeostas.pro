@@ -111,10 +111,12 @@ HEADERS += \
     include/numeric/tlsf.hpp \
     include/numeric/wk.hpp \
     include/stack_trace.hpp \
-    include/discovery.hpp \
     include/announcer.hpp \
     include/configuration.hpp \
-    include/variant.hpp
+    include/variant.hpp \
+    include/discoverer.hpp \
+    include/socket_stream.hpp \
+    include/ciphers.hpp
 
 SOURCES += \
     tests/all_tests.cpp \
@@ -142,6 +144,6 @@ SOURCES += \
     src/socket.cpp \
     src/natpmp.cpp \
     src/thread_pool.cpp \
-    src/discovery.cpp \
     src/announcer.cpp \
-    src/configuration.cpp
+    src/configuration.cpp \
+    src/discoverer.cpp

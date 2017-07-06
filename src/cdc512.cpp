@@ -35,116 +35,78 @@
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
-void cdc512_data::shuffle()
+cdc512 & cdc512::init()
 {
-	a -= e; f ^= h >>  9; h += a;
-	b -= f; g ^= a <<  9; a += b;
-	c -= g; h ^= b >> 23; b += c;
-	d -= h; a ^= c << 15; c += d;
-	e -= a; b ^= d >> 14; d += e;
-	f -= b; c ^= e << 20; e += f;
-	g -= c; d ^= f >> 17; f += g;
-	h -= d; e ^= g << 14; g += h;
-}
-//---------------------------------------------------------------------------
-void cdc512_data::shuffle(const cdc512_data & v)
-{
-	//constexpr const uint64_t prime_a = UINT64_C(0x992E367BE6F0EA1E);
-	//constexpr const uint64_t prime_b = UINT64_C(0x71DCF41FFACC283F);
-	//constexpr const uint64_t prime_c = UINT64_C(0xC9581F48D85ABD75);
-	//constexpr const uint64_t prime_d = UINT64_C(0xE4B93335FF1CE990);
-	//constexpr const uint64_t prime_e = UINT64_C(0xE51D6424EFEC1E01);
-	//constexpr const uint64_t prime_f = UINT64_C(0x353867A0E66C2A39);
-	//constexpr const uint64_t prime_g = UINT64_C(0xA8DBF7B782226B67);
-	//constexpr const uint64_t prime_h = UINT64_C(0x9F8B7F0DC254488E);
-	
-	//a -= v.e ^ prime_e; f ^= v.h >>  9; h += v.a ^ prime_a;
-	//b -= v.f ^ prime_f; g ^= v.a <<  9; a += v.b ^ prime_b;
-	//c -= v.g ^ prime_g; h ^= v.b >> 23; b += v.c ^ prime_c;
-	//d -= v.h ^ prime_h; a ^= v.c << 15; c += v.d ^ prime_d;
-	//e -= v.a ^ prime_a; b ^= v.d >> 14; d += v.e ^ prime_e;
-	//f -= v.b ^ prime_b; c ^= v.e << 20; e += v.f ^ prime_f;
-	//g -= v.c ^ prime_c; d ^= v.f >> 17; f += v.g ^ prime_g;
-	//h -= v.d ^ prime_d; e ^= v.g << 14; g += v.h ^ prime_h;
+    auto d = reinterpret_cast<uint64_t *>(this);
 
-	a -= v.e; f ^= v.h >>  9; h += v.a;
-	b -= v.f; g ^= v.a <<  9; a += v.b;
-	c -= v.g; h ^= v.b >> 23; b += v.c;
-	d -= v.h; a ^= v.c << 15; c += v.d;
-	e -= v.a; b ^= v.d >> 14; d += v.e;
-	f -= v.b; c ^= v.e << 20; e += v.f;
-	g -= v.c; d ^= v.f >> 17; f += v.g;
-	h -= v.d; e ^= v.g << 14; g += v.h;
-}
-//---------------------------------------------------------------------------
-void cdc512::init()
-{
-    a = htobe64(0x46F87CB1B3EB6319ull);
-    b = htobe64(0x7D7E68848EA8773Aull);
-    c = htobe64(0x18EEE71638D8563Aull);
-    d = htobe64(0xD5DB16BCFDF2D51Dull);
-    e = htobe64(0x4A878FB7B7463866ull);
-    f = htobe64(0xF8ED636BF755D298ull);
-    g = htobe64(0x2FF191FF69798254ull);
-    h = htobe64(0x8D3F9964239E6334ull);
+    d[0] = htole64(0x46F87CB1B3EB6319ull);
+    d[1] = htole64(0x7D7E68848EA8773Aull);
+    d[2] = htole64(0x18EEE71638D8563Aull);
+    d[3] = htole64(0xD5DB16BCFDF2D51Dull);
+    d[4] = htole64(0x4A878FB7B7463866ull);
+    d[5] = htole64(0xF8ED636BF755D298ull);
+    d[6] = htole64(0x2FF191FF69798254ull);
+    d[7] = htole64(0x8D3F9964239E6334ull);
 
     p = 0;
+
+    return *this;
 }
 //---------------------------------------------------------------------------
-void cdc512::update(const void * data, uintptr_t size)
+cdc512 & cdc512::update(const void * data, uintptr_t size)
 {
 	p += size;
 
-	while( size >= sizeof(cdc512_data) ){
-		shuffle(*reinterpret_cast<const cdc512_data *>(data));
-		shuffle();
-		data = (const uint8_t *) data + sizeof(cdc512_data);
-		size -= sizeof(cdc512_data);
+    while( size >= sizeof(key512) ){
+        shuffle(*reinterpret_cast<const key512 *>(data));
+        data = (const uint8_t *) data + sizeof(key512);
+        size -= sizeof(key512);
 	}
 
 	if( size > 0 ) {
-		cdc512_data pad;
+        key512 pad;
 		
-		std::memcpy(&pad, data, size);
-		std::memset((uint8_t *) &pad + size, 0, sizeof(cdc512_data) - size);
+        memcpy(pad.data(), data, size);
+        memset(pad.data() + size, 0, pad.size() - size);
 
 		shuffle(pad);
-		shuffle();
 	}
+
+    return *this;
 }
 //---------------------------------------------------------------------------
-void cdc512::finish()
+cdc512 & cdc512::finish()
 {
     if( p ) {
-        cdc512_data pad;
-        pad.a = pad.b = pad.c = pad.d = pad.e = pad.f = pad.g = pad.h = p;
-	
+        std::shuffler512 pad;
+
+        pad.a = p;
+        pad.b = p << 1;
+        pad.c = p << 2;
+        pad.d = p << 3;
+        pad.e = p << 4;
+        pad.f = p << 5;
+        pad.g = p << 6;
+        pad.h = p << 7;
+
+        pad.shuffle(*reinterpret_cast<std::shuffler512 *>(this));
         shuffle(pad);
-        shuffle();
     }
-	
-    for( auto & v : digest64 )
-        v = htobe64(v);
+
+    return *this;
 }
 //---------------------------------------------------------------------------
-std::string cdc512::to_string() const
+/*std::string cdc512::to_string() const
 {
-    std::stringstream s;
+    std::ostringstream s;
 	
 	s.fill('0');
 	s.width(2);
 	s.unsetf(std::ios::dec);
     s.setf(std::ios::hex | std::ios::uppercase);
 
-	size_t i;
-	
-	for( i = 0; i < sizeof(digest) - 1; i++ ) {
-		s << std::setw(2) << uint16_t(digest[i]);
-		if( (i & 1) != 0 )
-			s << '-';
-	}
-
-	s << std::setw(2) << uint16_t(digest[i]);
+    for( const auto & c : *this )
+        s << uint16_t(c);
 
 	return s.str();
 }
@@ -169,7 +131,7 @@ std::string cdc512::to_short_string(const char * abc, char delimiter, size_t int
     //        }
     //    }
 
-    nn::integer a(digest, sizeof(digest)), d = l, mod;
+    nn::integer a(data(), size()), d = l, mod;
 
     while( a.is_notz() ) {
         a = a.div(l, &mod);
@@ -205,19 +167,35 @@ void cdc512::from_short_string(const std::string & s, const char * abc)
         m *= l;
     }
 
-    memcpy(digest, a.data(), std::min(a.size(), sizeof(digest)));
-}
+    memcpy(data(), a.data(), std::min(a.size(), size()));
+}*/
 //---------------------------------------------------------------------------
-void cdc512::generate_fast_entropy()
+cdc512 & cdc512::generate_entropy_fast()
 {
-    auto ts = clock_gettime_ns();
+    auto f = std::bind(&cdc512::generate_entropy_fast, this);
+    struct {
+        uint64_t ts = clock_gettime_ns();
+        void * p0;
+        uintptr_t p1;
+        void * p2;
+        uintptr_t p3;
+        uint8_t ff[sizeof(f)];
+    } a;
+
+    memcpy(&a.ff, &f, sizeof(f));
+    a.p0 = &a;
+    a.p1 = uintptr_t(&a) ^ uintptr_t(a.ts);
+    a.p2 = this;
+    a.p3 = uintptr_t(a.ts) ^ uintptr_t(a.p0);
 
     init();
-    update(&ts, sizeof(ts));
+    update(&a, sizeof(a));
     finish();
+
+    return *this;
 }
 //---------------------------------------------------------------------------
-void cdc512::generate_entropy(std::vector<uint8_t> * p_entropy)
+cdc512 & cdc512::generate_entropy(std::vector<uint8_t> * p_entropy)
 {
     std::vector<uint8_t> e, & entropy = p_entropy == nullptr ? e : *p_entropy;
 
@@ -244,7 +222,7 @@ void cdc512::generate_entropy(std::vector<uint8_t> * p_entropy)
 
     rand::value_type v = 0;
 
-    for( auto & q : digest )
+    for( auto & q : *this )
         for(;;) {
             if( v == 0 )
                 v = r.get();
@@ -257,53 +235,9 @@ void cdc512::generate_entropy(std::vector<uint8_t> * p_entropy)
 
             v >>= 8;
         }
+
+    return *this;
 }
-//---------------------------------------------------------------------------
-#ifndef NDEBUG
-//---------------------------------------------------------------------------
-std::string cdc512::generate_prime()
-{
-    std::ostringstream s;
-
-    s.fill('0');
-    //s.width(2);
-    s.unsetf(std::ios::dec);
-    s.setf(std::ios::hex | std::ios::uppercase);
-
-    rand<8, uint64_t> r;
-
-    struct timespec ts;
-    ::clock_gettime(CLOCK_REALTIME, &ts);
-
-    r.srand(ts.tv_sec ^ uintptr_t(&s), ts.tv_nsec ^ uintptr_t(&s), ts.tv_sec ^ ts.tv_nsec);
-    r.warming();
-
-    uint64_t v = 0;
-
-    for( size_t i = 0; i < sizeof(digest64) / sizeof(digest64[0]); i++ ) {
-        uint64_t a = 0;
-
-        for( auto j = sizeof(digest64[0]); j > 0; j-- )
-            for(;;) {
-                if( v == 0 )
-                    v = r.get();
-
-                if( (v & 0xf) != 0 && ((v >> 4) & 0xf) != 0 ) {
-                    a = (a << 8) | (v & 0xff);
-                    v >>= 8;
-                    break;
-                }
-
-                v >>= 8;
-            }
-
-        s << "\t" << char(i + 'a') << " = htobe64(0x" << a << "ull);\n";
-    }
-
-    return s.str();
-}
-//---------------------------------------------------------------------------
-#endif
 //---------------------------------------------------------------------------
 } // namespace homeostas
 //------------------------------------------------------------------------------

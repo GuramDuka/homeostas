@@ -22,8 +22,8 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
-#ifndef DISCOVERY_HPP_INCLUDED
-#define DISCOVERY_HPP_INCLUDED
+#ifndef DISCOVERER_HPP_INCLUDED
+#define DISCOVERER_HPP_INCLUDED
 //------------------------------------------------------------------------------
 #pragma once
 //------------------------------------------------------------------------------
@@ -36,18 +36,23 @@
 #include <condition_variable>
 #include <type_traits>
 //------------------------------------------------------------------------------
-#include <sqlite3pp/sqlite3pp.h>
+#include "sqlite3pp/sqlite3pp.h"
 #include "thread_pool.hpp"
-#include "socket.hpp"
+#include "socket_stream.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-class discovery {
+class discoverer {
 public:
-    ~discovery() {
+    ~discoverer() {
         shutdown();
+    }
+
+    static auto instance() {
+        static discoverer singleton;
+        return &singleton;
     }
 
     bool started() const {
@@ -65,25 +70,54 @@ public:
     const auto & pubs() const {
         return pubs_;
     }
+
+    std::vector<socket_addr> discover_host_addresses(const std::key512 & public_key) {
+        std::vector<socket_addr> t;
+
+        return t;
+    }
+
+    std::key512 discover_p2p_key(const std::key512 & public_key) {
+
+        throw std::xruntime_error("Unknown public key", __FILE__, __LINE__);
+
+        return std::key512();
+    }
+
+    auto & detach_db() {
+        st_sel_ = nullptr;
+        st_sel_by_pid_ = nullptr;
+        st_ins_ = nullptr;
+        st_upd_ = nullptr;
+        db_ = nullptr;
+        return *this;
+    }
 protected:
+    void connect_db();
     void listener();
     void worker(std::shared_ptr<active_socket> socket);
 
     std::vector<socket_addr> pubs_;
     std::unique_ptr<std::thread> thread_;
-    std::mutex mtx_;
-    std::condition_variable cv_;
+    std::unique_ptr<std::mutex> mtx_;
+    std::unique_ptr<std::condition_variable> cv_;
+
+    std::unique_ptr<sqlite3pp::database> db_;
+    std::unique_ptr<sqlite3pp::query> st_sel_;
+    std::unique_ptr<sqlite3pp::query> st_sel_by_pid_;
+    std::unique_ptr<sqlite3pp::command> st_ins_;
+    std::unique_ptr<sqlite3pp::command> st_upd_;
 
     bool shutdown_;
 };
 //------------------------------------------------------------------------------
 namespace tests {
 //------------------------------------------------------------------------------
-void discovery_test();
+void discoverer_test();
 //------------------------------------------------------------------------------
 } // namespace tests
 //------------------------------------------------------------------------------
 } // namespace homeostas
 //------------------------------------------------------------------------------
-#endif // SERVER_HPP_INCLUDED
+#endif // DISCOVERER_HPP_INCLUDED
 //------------------------------------------------------------------------------

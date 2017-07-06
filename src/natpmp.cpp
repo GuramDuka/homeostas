@@ -39,8 +39,8 @@ void natpmp::startup()
         return;
 
     shutdown_ = false;
-    socket_.reset(new active_socket);
-    thread_.reset(new std::thread(&natpmp::worker, this));
+    socket_ = std::make_unique<active_socket>();
+    thread_ = std::make_unique<std::thread>(&natpmp::worker, this);
 }
 //------------------------------------------------------------------------------
 void natpmp::shutdown()

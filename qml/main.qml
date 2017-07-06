@@ -104,6 +104,6 @@ ApplicationWindow {
         onClicked: {
             currentDirectoryTracker = -1
             directoryTrackerDialog.createDirectoryTracker()
-		}
+        }
     }
 }

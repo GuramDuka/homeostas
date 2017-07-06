@@ -118,7 +118,7 @@ namespace tlsf {  // Two Level Segregated Fit memory allocator
 */
 #if defined (__alpha__) || defined (__ia64__) || defined (__x86_64__) \
 	|| defined (_WIN64) || defined (__LP64__) || defined (__LLP64__)
-#define TLSF_64BIT
+#   define TLSF_64BIT 1
 #endif
 
 /*
@@ -128,49 +128,68 @@ namespace tlsf {  // Two Level Segregated Fit memory allocator
 #if defined (__GNUC__) && (__GNUC__ > 3 || (__GNUC__ == 3 && __GNUG_MINOR__ >= 4)) \
 	&& defined (__GNUC_PATCHLEVEL__)
 
-inline int tlsf_ffs(unsigned int word)
+inline int tlsf_ffs(size_t word)
 {
-	return __builtin_ffs(word) - 1;
+#if TLSF_64BIT
+    return __builtin_ffsll(word) - 1;
+#else
+    return __builtin_ffs(word) - 1;
+#endif
 }
 
-inline int tlsf_fls(unsigned int word)
+inline int tlsf_fls(size_t word)
 {
-	const int bit = word ? 32 - __builtin_clz(word) : 0;
-	return bit - 1;
+    int bit = word ? sizeof(word) * CHAR_BIT -
+#if TLSF_64BIT
+        __builtin_clzll(word)
+#else
+        __builtin_clz(word)
+#endif
+    : 0;
+    return bit - 1;
 }
 
 #elif defined (_MSC_VER) && (_MSC_VER >= 1400) && (defined (_M_IX86) || defined (_M_X64))
-/* Microsoft Visual C++ support on x86/X64 architectures. */
+// Microsoft Visual C++ support on x86/X64 architectures
 
 #include <intrin.h>
 
 #pragma intrinsic(_BitScanReverse)
+#pragma intrinsic(_BitScanReverse64)
 #pragma intrinsic(_BitScanForward)
+#pragma intrinsic(_BitScanForward64)
 
-inline int tlsf_fls(unsigned int word)
+inline int tlsf_fls(size_t word)
 {
-	unsigned long index;
-	return _BitScanReverse(&index, word) ? index : -1;
+    DWORD index;
+#if TLSF_64BIT
+    return _BitScanReverse64(&index, word) ? index : -1;
+#else
+    return _BitScanReverse(&index, word) ? index : -1;
+#endif
 }
 
-inline int tlsf_ffs(unsigned int word)
+inline int tlsf_ffs(size_t word)
 {
-	unsigned long index;
-	return _BitScanForward(&index, word) ? index : -1;
+    DWORD index;
+#if TLSF_64BIT
+    return _BitScanForward64(&index, word) ? index : -1;
+#else
+    return _BitScanForward(&index, word) ? index : -1;
+#endif
 }
-
 #elif defined (_MSC_VER) && defined (_M_PPC)
-/* Microsoft Visual C++ support on PowerPC architectures. */
+// Microsoft Visual C++ support on PowerPC architectures.
 
 #include <ppcintrinsics.h>
 
-inline int tlsf_fls(unsigned int word)
+inline int tlsf_fls(size_t word)
 {
 	const int bit = 32 - _CountLeadingZeros(word);
 	return bit - 1;
 }
 
-inline int tlsf_ffs(unsigned int word)
+inline int tlsf_ffs(size_t word)
 {
 	const unsigned int reverse = word & (~word + 1);
 	const int bit = 32 - _CountLeadingZeros(reverse);
@@ -178,87 +197,69 @@ inline int tlsf_ffs(unsigned int word)
 }
 
 #elif defined (__ARMCC_VERSION)
-/* RealView Compilation Tools for ARM */
+// RealView Compilation Tools for ARM
 
-inline int tlsf_ffs(unsigned int word)
+inline int tlsf_ffs(size_t word)
 {
 	const unsigned int reverse = word & (~word + 1);
 	const int bit = 32 - __clz(reverse);
 	return bit - 1;
 }
 
-inline int tlsf_fls(unsigned int word)
+inline int tlsf_fls(size_t word)
 {
 	const int bit = word ? 32 - __clz(word) : 0;
 	return bit - 1;
 }
 
 #elif defined (__ghs__)
-/* Green Hills support for PowerPC */
+// Green Hills support for PowerPC
 
 #include <ppc_ghs.h>
 
-inline int tlsf_ffs(unsigned int word)
+inline int tlsf_ffs(size_t word)
 {
 	const unsigned int reverse = word & (~word + 1);
 	const int bit = 32 - __CLZ32(reverse);
 	return bit - 1;
 }
 
-inline int tlsf_fls(unsigned int word)
+inline int tlsf_fls(size_t word)
 {
 	const int bit = word ? 32 - __CLZ32(word) : 0;
 	return bit - 1;
 }
 
 #else
-/* Fall back to generic implementation. */
+// Fall back to generic implementation.
 
-inline int tlsf_fls_generic(unsigned int word)
+inline int tlsf_fls_generic(size_t word)
 {
-	int bit = 32;
+    int bit = sizeof(word) * CHAR_BIT;
 
-	if (!word) bit -= 1;
-	if (!(word & 0xffff0000)) { word <<= 16; bit -= 16; }
-	if (!(word & 0xff000000)) { word <<= 8; bit -= 8; }
-	if (!(word & 0xf0000000)) { word <<= 4; bit -= 4; }
-	if (!(word & 0xc0000000)) { word <<= 2; bit -= 2; }
-	if (!(word & 0x80000000)) { word <<= 1; bit -= 1; }
+    if( !word ) bit -= 1;
+#if TLSF_64BIT
+    if( !(word & 0xffffffff) ) { word <<= 32; bit -= 32; }
+#endif
+    if( !(word & 0xffff0000) ) { word <<= 16; bit -= 16; }
+    if( !(word & 0xff000000) ) { word <<=  8; bit -=  8; }
+    if( !(word & 0xf0000000) ) { word <<=  4; bit -=  4; }
+    if( !(word & 0xc0000000) ) { word <<=  2; bit -=  2; }
+    if( !(word & 0x80000000) ) { word <<=  1; bit -=  1; }
 
 	return bit;
 }
 
-/* Implement ffs in terms of fls. */
-inline int tlsf_ffs(unsigned int word)
+// Implement ffs in terms of fls
+inline int tlsf_ffs(size_t word)
 {
-	return tlsf_fls_generic(word & (~word + 1)) - 1;
+    return tlsf_fls_generic(word & (~word + 1)) - 1;
 }
 
 inline int tlsf_fls(unsigned int word)
 {
-	return tlsf_fls_generic(word) - 1;
+    return tlsf_fls_generic(word) - 1;
 }
-
-#endif
-
-/* Possibly 64-bit version of tlsf_fls. */
-#if defined (TLSF_64BIT)
-inline int tlsf_fls_sizet(size_t size)
-{
-	unsigned int high = (unsigned int) (size >> 32);
-	int bits = 0;
-
-	if( high ) {
-		bits = 32 + tlsf_fls(high);
-	}
-	else {
-		bits = tlsf_fls((unsigned int) size & 0xffffffff);
-	}
-
-	return bits;
-}
-#else
-inline int tlsf_fls_sizet(size_t size){ return tlsf_fls(size); }
 #endif
 //------------------------------------------------------------------------------
 /////////////////////////////////////////////////////////////////////////////
@@ -788,7 +789,7 @@ private:
             sl = static_cast<int>(size) / (SMALL_BLOCK_SIZE / SL_INDEX_COUNT);
         }
         else {
-            fl = tlsf_fls_sizet(size);
+            fl = tlsf_fls(size);
             sl = static_cast<int>(size >> (fl - SL_INDEX_COUNT_LOG2)) ^ (1 << SL_INDEX_COUNT_LOG2);
             fl -= (FL_INDEX_SHIFT - 1);
         }
@@ -799,7 +800,7 @@ private:
 
     static void mapping_search(size_t size, int * fli, int * sli) {
         if( size >= (1 << SL_INDEX_COUNT_LOG2) ) {
-            const size_t round = (1 << (tlsf_fls_sizet(size) - SL_INDEX_COUNT_LOG2)) - 1;
+            const size_t round = (1 << (tlsf_fls(size) - SL_INDEX_COUNT_LOG2)) - 1;
             size += round;
         }
         mapping_insert(size, fli, sli);

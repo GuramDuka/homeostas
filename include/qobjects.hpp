@@ -39,6 +39,7 @@
 //------------------------------------------------------------------------------
 #include "tracker.hpp"
 #include "server.hpp"
+#include "client.hpp"
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
@@ -71,12 +72,17 @@ public slots:
     void startServer();
     void stopServer();
 
+    void startClient();
+    void stopClient();
+
+    void loadTrackers();
     void startTrackers();
     void stopTrackers();
 private:
     QString uniqueId_;
     std::vector<std::shared_ptr<homeostas::directory_tracker>> trackers_;
     std::unique_ptr<homeostas::server> server_;
+    std::unique_ptr<homeostas::client> client_;
 };
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////

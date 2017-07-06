@@ -33,7 +33,6 @@ namespace homeostas {
 void directory_tracker::worker()
 {
     sqlite3pp::database db;
-    sqlite3_enable_shared_cache(1);
 
     directory_indexer di;
     di.modified_only(true);
@@ -44,7 +43,7 @@ void directory_tracker::worker()
 
         db.exceptions(false).connect(
             db_path_name_,
-            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_SHAREDCACHE
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
         );
 
         auto rc = sqlite3pp::command(db, R"EOS(
@@ -111,7 +110,7 @@ void directory_tracker::startup()
             t = t.substr(0, 13);
 
         t.push_back('-');
-        t += ctx.to_string();
+        t += std::to_string(ctx);
 
         return t;
     };
@@ -134,7 +133,7 @@ void directory_tracker::startup()
         mkdir(db_path_);
 
     shutdown_ = false;
-    thread_.reset(new std::thread(&directory_tracker::worker, this));
+    thread_ = std::make_unique<std::thread>(&directory_tracker::worker, this);
 }
 //------------------------------------------------------------------------------
 void directory_tracker::shutdown()

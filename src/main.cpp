@@ -84,17 +84,35 @@ int main(int argc, char ** argv)
         return app.exec();
     }
 #else
-    try {
-        Homeostas::instance()->startTrackers();
-        Homeostas::instance()->startServer();
-    }
-    catch( const std::exception & e ) {
-        qDebug().noquote().nospace() << e.what();
-    }
-    catch( ... ) {
-        qDebug().noquote().nospace() << "undefined c++ exception catched";
+    if( daemon ) {
+        try {
+            Homeostas::instance()->startTrackers();
+            Homeostas::instance()->startServer();
+        }
+        catch( const std::exception & e ) {
+            qDebug().noquote().nospace() << e.what();
+        }
+        catch( ... ) {
+            qDebug().noquote().nospace() << "undefined c++ exception catched";
+        }
     }
 #endif
+    else {
+        try {
+// debug testing only
+#if !defined(Q_OS_ANDROID) && !defined(NDEBUG)
+            Homeostas::instance()->startTrackers();
+            Homeostas::instance()->startServer();
+#endif
+            Homeostas::instance()->startClient();
+        }
+        catch( const std::exception & e ) {
+            qDebug().noquote().nospace() << e.what();
+        }
+        catch( ... ) {
+            qDebug().noquote().nospace() << "undefined c++ exception catched";
+        }
+    }
 
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QGuiApplication app(argc, argv);

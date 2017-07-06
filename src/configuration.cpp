@@ -30,22 +30,33 @@ namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
+configuration::~configuration()
+{
+}
+//------------------------------------------------------------------------------
+configuration::configuration()
+{
+    assert( this == instance() );
+
+    if( this != instance() )
+        abort();
+}
+//------------------------------------------------------------------------------
 void configuration::connect_db()
 {
     if( db_ == nullptr ) {
-        std::unique_ptr<sqlite3pp::database> db(new sqlite3pp::database);
-        sqlite3_enable_shared_cache(1);
+        db_ = std::make_unique<sqlite3pp::database>();
 
-        auto db_path = homeostas::home_path(false) + ".homeostas";
+        auto db_path = home_path(false) + ".homeostas";
 
         if( access(db_path, F_OK) != 0 && errno == ENOENT )
             mkdir(db_path);
 
-        db->connect(db_path + homeostas::path_delimiter + "homeostas.sqlite",
-            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_SHAREDCACHE
+        db_->connect(db_path + path_delimiter + "homeostas.sqlite",
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
         );
 
-        sqlite3pp::command(*db, R"EOS(
+        db_->execute_all(R"EOS(
             PRAGMA page_size = 4096;
             PRAGMA journal_mode = WAL;
             PRAGMA count_changes = OFF;
@@ -53,9 +64,9 @@ void configuration::connect_db()
             PRAGMA cache_size = -2048;
             PRAGMA synchronous = NORMAL;
             /*PRAGMA temp_store = MEMORY;*/
-        )EOS").execute_all();
+        )EOS");
 
-        sqlite3pp::command(*db, R"EOS(
+        db_->execute_all(R"EOS(
             CREATE TABLE IF NOT EXISTS rowids (
                 id              INTEGER PRIMARY KEY ON CONFLICT REPLACE,
                 counter    		INTEGER NOT NULL
@@ -65,7 +76,7 @@ void configuration::connect_db()
                 id              INTEGER PRIMARY KEY ON CONFLICT ABORT,
                 parent_id		INTEGER NOT NULL,   /* link on entries id */
                 name            TEXT NOT NULL,
-                value_type		INTEGER,	/* 1 - boolean, 2 - integer, 3 - double, 4 - string */
+                value_type		INTEGER,	/* 1 - boolean, 2 - integer, 3 - double, 4 - string, 5 - blob, 6 - digest */
                 value_b			INTEGER,	/* boolean */
                 value_i			INTEGER,	/* integer */
                 value_n			REAL,       /* double */
@@ -82,9 +93,9 @@ void configuration::connect_db()
             END;
 
             CREATE UNIQUE INDEX IF NOT EXISTS i1 ON config (parent_id, name);
-        )EOS").execute_all();
+        )EOS");
 
-        st_sel_.reset(new sqlite3pp::query(*db, R"EOS(
+        st_sel_ = std::make_unique<sqlite3pp::query>(*db_, R"EOS(
             SELECT
                 id                                                      AS id,
                 name                                                    AS name,
@@ -95,9 +106,9 @@ void configuration::connect_db()
             WHERE
                 parent_id = :parent_id
                 AND name = :name
-        )EOS"));
+        )EOS");
 
-        st_sel_by_pid_.reset(new sqlite3pp::query(*db, R"EOS(
+        st_sel_by_pid_ = std::make_unique<sqlite3pp::query>(*db_, R"EOS(
             SELECT
                 id                                                      AS id,
                 name                                                    AS name,
@@ -107,16 +118,16 @@ void configuration::connect_db()
                 config
             WHERE
                 parent_id = :parent_id
-        )EOS"));
+        )EOS");
 
-        st_ins_.reset(new sqlite3pp::command(*db, R"EOS(
+        st_ins_ = std::make_unique<sqlite3pp::command>(*db_, R"EOS(
             INSERT INTO config
                 (id, parent_id, name, value_type, value_b, value_i, value_n, value_s, value_l)
                 VALUES
                 (:id, :parent_id, :name, :value_type, :value_b, :value_i, :value_n, :value_s, :value_l)
-        )EOS"));
+        )EOS");
 
-        st_upd_.reset(new sqlite3pp::command(*db, R"EOS(
+        st_upd_ = std::make_unique<sqlite3pp::command>(*db_, R"EOS(
             UPDATE config SET
                 name        = :name,
                 value_type  = :value_type,
@@ -128,10 +139,10 @@ void configuration::connect_db()
             WHERE
                 parent_id = :parent_id
                 AND name = :name
-        )EOS"));
+        )EOS");
 
         row_next_id_ = [&] {
-            sqlite3pp::query st(*db, R"EOS(
+            sqlite3pp::query st(*db_, R"EOS(
                 SELECT
                     counter
                 FROM
@@ -146,8 +157,6 @@ void configuration::connect_db()
 
             return std::rhash(i ? i->get<uint64_t>(0) : 0) + 1;
         }();
-
-        db_.reset(db.release());
     }
 }
 //------------------------------------------------------------------------------
@@ -194,7 +203,9 @@ uint64_t configuration::get_pid(const char * var_name, const char ** p_name, boo
             break;
 
         size_t l = (a - p) * sizeof(char);
-        char * n = (char *) alloca(l + sizeof(char));
+        //char * n = (char *) alloca(l + sizeof(char));
+        std::unique_ptr<char> b(new char [l + 1]);
+        char * n = b.get();
         memcpy(n, p, l);
         n[l] = '\0';
 

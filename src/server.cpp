@@ -22,16 +22,16 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
-#include <string>
+#if QT_CORE_LIB
+#   include <QString>
+#   include <QDebug>
+#endif
 //------------------------------------------------------------------------------
 #include "scope_exit.hpp"
 #include "port.hpp"
 #include "socket.hpp"
 #include "server.hpp"
-#if QT_CORE_LIB
-#   include <QString>
-#   include <QDebug>
-#endif
+#include "discoverer.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
@@ -56,15 +56,24 @@ void server::listener()
         return a.addr_equ(b);
     };
 
-    auto port = std::ihash<uint16_t>(clock_gettime_ns());
+    auto port = [&] {
+        auto addrs = discoverer::instance()->discover_host_addresses(host_public_key_);
+
+        for( const auto & a : addrs )
+            if( a.is_link_local() || a.is_loopback() )
+                return a.port();
+
+        return std::ihash<uint16_t>(clock_gettime_ns());
+    }();
+
     std::vector<socket_addr> interfaces;
 
     auto recheck_interfaces = [&] {
         std::vector<socket_addr> t;
 
         for( const auto & a : basic_socket::interfaces<decltype(t)>() ) {
-            if( a.is_link_local() || a.is_loopback() )
-                continue;
+            //if( a.is_link_local() || a.is_loopback() )
+            //    continue;
             t.emplace_back(a);
         }
 
@@ -103,7 +112,7 @@ void server::listener()
     };
 
     auto reinitialize = [&] {
-        port_ = std::rhash(port);
+        auto nport = std::rhash(port);
 
         std::unique_lock<std::mutex> lock(mtx_);
 
@@ -116,7 +125,7 @@ void server::listener()
             if( sockets_.size() <= i )
                 sockets_.emplace_back(std::make_shared<passive_socket>());
 
-            if( !sockets_[i]->listen(interfaces[i].port(port_)) )
+            if( !sockets_[i]->listen(interfaces[i].port(port)) )
                 break;
         }
 
@@ -125,6 +134,9 @@ void server::listener()
 
         for( size_t i = 0; i < sockets_.size(); i++ )
             thread_pool_t::instance()->enqueue(accepter, sockets_[i]);
+
+        if( sockets_.size() == interfaces.size() && !interfaces.empty() )
+            port_ = nport;
     };
 
     auto wait = [&] (const std::chrono::seconds & s) {
@@ -139,7 +151,6 @@ void server::listener()
 
     while( !shutdown_ ) {
         try {
-
             bool port_changed = false;
 
             while( !shutdown_ ) {
@@ -152,7 +163,7 @@ void server::listener()
                 if( !sockets_.empty() )
                     break;
 
-                port_++;
+                port++;
                 port_changed = true;
 
                 wait(std::chrono::seconds(interfaces.empty() ? 60 : 1));
@@ -160,6 +171,8 @@ void server::listener()
 
             if( shutdown_ )
                 break;
+
+            announcer::instance()->announce_host_addresses(host_public_key_, interfaces);
 
             bool public_addrs_changed = recheck_public_addrs();
 
@@ -169,7 +182,7 @@ void server::listener()
 
                 if( public_addrs_changed ) {
                     if( natpmp_ == nullptr )
-                        natpmp_.reset(new natpmp);
+                        natpmp_ = std::make_unique<natpmp>();
 
                     announcer_ = nullptr;
                     natpmp_->shutdown();
@@ -184,7 +197,7 @@ void server::listener()
                         qDebug().noquote().nospace() << QString::fromStdString(std::to_string(t.back()));
 #endif
 
-                        announcer_.reset(new announcer);
+                        announcer_ = std::make_unique<announcer>();
                         announcer_->pubs(t);
                         announcer_->startup();
                     });
@@ -195,7 +208,7 @@ void server::listener()
                 natpmp_ = nullptr;
 
                 if( public_addrs_changed || port_changed ) {
-                    announcer_.reset(new announcer);
+                    announcer_ = std::make_unique<announcer>();
                     announcer_->pubs(public_addrs_);
                     announcer_->startup();
                 }
@@ -223,6 +236,50 @@ void server::listener()
 void server::worker(std::shared_ptr<active_socket> socket)
 {
     socket_stream ss(socket);
+    std::key512 peer_pubic_key, peer_p2p_key;
+
+    ss.handshake_functor([&] (
+        handshake::packet * req,
+        handshake::packet * res,
+        std::key512 * p_local_transport_key,
+        std::key512 * p_remote_transport_key) {
+        assert( req != nullptr );
+
+        if( res == nullptr ) {
+            // client request received
+            discoverer d;
+            peer_pubic_key = req->public_key;
+            peer_p2p_key = d.discover_p2p_key(peer_pubic_key);
+        }
+        else if( p_local_transport_key == nullptr && p_remote_transport_key == nullptr ) {
+            // client fingerprint based on p2p key and server public key
+            std::key512 fingerprint = cdc512(std::begin(peer_p2p_key), std::end(peer_p2p_key),
+                std::begin(host_public_key_), std::end(host_public_key_));
+
+            if( fingerprint == req->fingerprint ) {
+                // approved client fingerprint
+                res->error = handshake::ErrorNone;
+                // setup response before send to client
+                std::copy(std::begin(host_public_key_), std::end(host_public_key_),
+                    std::begin(res->public_key), std::end(res->public_key));
+
+                cdc512 fingerprint(std::begin(peer_p2p_key), std::end(peer_p2p_key),
+                    std::begin(req->fingerprint), std::end(req->fingerprint));
+                std::copy(std::begin(fingerprint), std::end(fingerprint),
+                    std::begin(res->fingerprint), std::end(res->fingerprint));
+            }
+            else {
+                res->error = handshake::ErrorInvalidFingerprint;
+            }
+        }
+        else {
+            // client approved my fingerprint
+            *p_local_transport_key = cdc512(std::begin(peer_p2p_key), std::end(peer_p2p_key),
+                std::begin(res->session_key), std::end(res->session_key));
+            *p_remote_transport_key = cdc512(std::begin(peer_p2p_key), std::end(peer_p2p_key),
+                std::begin(req->session_key), std::end(req->session_key));
+        }
+    });
 
     try {
         std::string s;
@@ -251,7 +308,7 @@ void server::startup()
         return;
 
     shutdown_ = false;
-    thread_.reset(new std::thread(&server::listener, this));
+    thread_ = std::make_unique<std::thread>(&server::listener, this);
 }
 //------------------------------------------------------------------------------
 void server::shutdown()

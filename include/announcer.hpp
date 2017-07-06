@@ -37,7 +37,7 @@
 #include <type_traits>
 //------------------------------------------------------------------------------
 #include "thread_pool.hpp"
-#include "socket.hpp"
+#include "socket_stream.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
@@ -49,6 +49,11 @@ public:
         shutdown();
     }
 
+    static auto instance() {
+        static announcer singleton;
+        return &singleton;
+    }
+
     bool started() const {
         return thread_ != nullptr;
     }
@@ -58,8 +63,8 @@ public:
             return;
 
         shutdown_ = false;
-        socket_.reset(new active_socket);
-        thread_.reset(new std::thread(&announcer::worker, this));
+        socket_ = std::make_unique<active_socket>();
+        thread_ = std::make_unique<std::thread>(&announcer::worker, this);
     }
 
     void shutdown() {
@@ -85,6 +90,11 @@ public:
     const auto & pubs() const {
         return pubs_;
     }
+
+    void announce_host_addresses(const std::key512 & /*id*/, const std::vector<socket_addr> & /*addrs*/) {
+
+    }
+
 protected:
     void worker();
 

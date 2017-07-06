@@ -36,8 +36,9 @@
 #include <condition_variable>
 #include <type_traits>
 //------------------------------------------------------------------------------
+#include "std_ext.hpp"
 #include "thread_pool.hpp"
-#include "socket.hpp"
+#include "socket_stream.hpp"
 #include "natpmp.hpp"
 #include "tracker.hpp"
 #include "announcer.hpp"
@@ -58,6 +59,25 @@ public:
 
     void startup();
     void shutdown();
+
+    auto & host_public_key(const std::key512 & key) {
+        host_public_key_ = key;
+        return *this;
+    }
+
+    const auto & host_public_key() const {
+        return host_public_key_;
+    }
+
+    auto & host_private_key(const std::key512 & key) {
+        host_private_key_ = key;
+        return *this;
+    }
+
+    const auto & host_private_key() const {
+        return host_private_key_;
+    }
+
 protected:
     void listener();
     void worker(std::shared_ptr<active_socket> socket);
@@ -71,6 +91,8 @@ protected:
     std::condition_variable cv_;
 
     uint16_t port_;
+    std::key512 host_public_key_;
+    std::key512 host_private_key_;
 
     bool shutdown_;
 };

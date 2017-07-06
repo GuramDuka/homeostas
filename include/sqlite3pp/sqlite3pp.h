@@ -148,7 +148,9 @@ namespace sqlite3pp {
         int connect(char const* dbname, int flags, char const* vfs = nullptr) {
             disconnect();
 
-            int rc = sqlite3_open_v2(dbname, &db_, flags, vfs);
+            sqlite3_enable_shared_cache(1);
+
+            int rc = sqlite3_open_v2(dbname, &db_, flags | SQLITE_OPEN_SHAREDCACHE, vfs);
             if (rc != SQLITE_OK)
                 throw_database_error();
             else
@@ -636,19 +638,18 @@ namespace sqlite3pp {
         }
 
         template <typename T,
-            typename std::enable_if<
-                std::is_base_of<T, std::array<typename T::value_type,
-#if __GNUG__
-                    T::_Nm
-#elif _MSC_VER
-                    T::_Size
-#endif
-                >>::value
-            >::type * = nullptr
+            typename std::enable_if<std::is_array<T>::value>::type * = nullptr
         >
         int bind(const char * name, const T & value, copy_semantic fcopy) {
             typedef typename T::value_type VT;
             return bind(param_name2idx(name), (const void *) &value[0], int(value.size() * sizeof(VT)), fcopy);
+        }
+
+        template <typename T,
+            typename std::enable_if<std::is_class<T>::value>::type * = nullptr
+        >
+        int bind(const char name [], const T & value, copy_semantic fcopy) {
+            return bind(param_name2idx(name), (const void *) &value, int(sizeof(value)), fcopy);
         }
 
         template <typename T,
@@ -662,73 +663,18 @@ namespace sqlite3pp {
         }
 
         template <typename T,
-            typename std::enable_if<
-                std::is_base_of<T, std::array<typename T::value_type,
-#if __GNUG__
-                    T::_Nm
-#elif _MSC_VER
-                    T::_Size
-#endif
-                      >>::value
-            >::type * = nullptr
+            typename std::enable_if<std::is_array<T>::value>::type * = nullptr
         >
         int bind(const std::string & name, const T & value, copy_semantic fcopy) {
             typedef typename T::value_type VT;
             return bind(param_name2idx(name.c_str()), (const void *) &value[0], int(value.size() * sizeof(VT)), fcopy);
         }
 
-        // callback to type defined later, used in variant
         template <typename T,
-            typename std::enable_if<
-                !std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
-                !std::is_base_of<T, std::array<typename T::value_type,
-#if __GNUG__
-                    T::_Nm
-#elif _MSC_VER
-                    T::_Size
-#endif
-                >>::value
-                && std::is_class<T>::value
-            >::type * = nullptr
+            typename std::enable_if<std::is_class<T>::value>::type * = nullptr
         >
-        int bind(int idx, const T & v, copy_semantic fcopy = copy_semantic::copy) {
-            return v.bind(*this, idx, fcopy);
-        }
-
-        // callback to type defined later, used in variant
-        template <typename T,
-            typename std::enable_if<
-                !std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
-                !std::is_base_of<T, std::array<typename T::value_type,
-#if __GNUG__
-                    T::_Nm
-#elif _MSC_VER
-                    T::_Size
-#endif
-                >>::value
-                && std::is_class<T>::value
-            >::type * = nullptr
-        >
-        int bind(const char * name, const T & v, copy_semantic fcopy = copy_semantic::copy) {
-            return v.bind(*this, param_name2idx(name), fcopy);
-        }
-
-        // callback to type defined later, used in variant
-        template <typename T,
-            typename std::enable_if<
-                !std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
-                !std::is_base_of<T, std::array<typename T::value_type,
-#if __GNUG__
-                    T::_Nm
-#elif _MSC_VER
-                    T::_Size
-#endif
-                >>::value
-                && std::is_class<T>::value
-            >::type * = nullptr
-        >
-        int bind(const std::string & name, const T & v, copy_semantic fcopy = copy_semantic::copy) {
-            return v.bind(*this, param_name2idx(name.c_str()), fcopy);
+        int bind(const std::string & name, const T & value, copy_semantic fcopy) {
+            return bind(param_name2idx(name.c_str()), (const void *) &value, int(sizeof(value)), fcopy);
         }
     protected:
         ~statement() {
@@ -763,6 +709,10 @@ namespace sqlite3pp {
 
         const auto & rc() const {
             return rc_;
+        }
+
+        const auto & db() const {
+            return db_;
         }
 
     protected:
@@ -975,31 +925,30 @@ namespace sqlite3pp {
                 return T(p, p + s / sizeof (VT));
             }
 
-            /*// callback to type defined later, used in variant
             template <typename T,
-                typename std::enable_if<
-                    // !std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
-                    // std::is_class<T>::value && std::is_function<typename T::get>::value
-                    std::is_same<T, std::variant>::value
-                >::type * = nullptr
+                typename std::enable_if<std::is_array<T>::value>::type * = nullptr
             >
             T get(int idx) const {
-                switch( column_type(idx) ) {
-                    case SQL_NIL :
-                        break;
-                    case SQL_INT :
-                        return get<int64_t>(idx);
-                    case SQL_FLT :
-                        return get<double>(idx);
-                    case SQL_TXT :
-                        return get<const char *>(idx);
-                    case SQL_BLB :
-                    default      :
-                        throw std::xruntime_error("Unsupported type", __FILE__, __LINE__);
-                }
+                typedef typename T::value_type VT;
 
-                return T();
-            }*/
+                auto s = sqlite3_column_bytes(cmd_->stmt_, idx);
+                const VT * p = static_cast<const VT *> (sqlite3_column_blob(cmd_->stmt_, idx));
+                return T(p, p + s / sizeof (VT));
+            }
+
+            template <typename T,
+                typename std::enable_if<std::is_class<T>::value>::type * = nullptr
+            >
+            T get(int idx) const {
+                auto s = sqlite3_column_bytes(cmd_->stmt_, idx);
+                if( size_t(s) < sizeof(T) ) {
+                    if( cmd_->db().exceptions() )
+                        throw std::range_error("sqlite3_column_bytes < sizeof(T)");
+                    return T();
+                }
+                const T * p = static_cast<const T *> (sqlite3_column_blob(cmd_->stmt_, idx));
+                return T(*p);
+            }
 
             template <typename T>
             T get(const char * name) const {

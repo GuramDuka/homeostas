@@ -27,7 +27,7 @@
 //------------------------------------------------------------------------------
 #include "cdc512.hpp"
 #include "thread_pool.hpp"
-#include "socket.hpp"
+#include "socket_stream.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
@@ -94,7 +94,7 @@ void socket_test()
                             std::string s;
                             ss >> s;
                             cdc512 ctx(s.begin(), s.end());
-                            ss << ctx.to_string() << std::flush;
+                            ss << std::to_string(ctx) << std::flush;
 
                             //std::unique_lock<std::mutex> lock(mtx);
                             //std::qerr
@@ -143,10 +143,10 @@ void socket_test()
                     //std::this_thread::sleep_for(std::chrono::seconds(2));
 
                     cdc512 ctx1;
-                    ctx1.generate_fast_entropy();
-                    const auto s1 = ctx1.to_string();
+                    ctx1.generate_entropy_fast();
+                    const auto s1 = std::to_string(ctx1);
                     cdc512 ctx2(s1.begin(), s1.end());
-                    const auto s2 = ctx2.to_string();
+                    const auto s2 = std::to_string(ctx2);
 
                     try {
                         client_socket->connect(wildcards[i % wildcards.size()]);

@@ -49,7 +49,7 @@
 
         2^^2097263
 
- * Modified in 2017 by Guram Duka
+ * Modified on 2017 by Guram Duka
 */
 //------------------------------------------------------------------------------
 #ifndef RAND_HPP_INCLUDED
@@ -96,6 +96,36 @@ public:
     }
 
     enum { srand_size = sizeof(T) * N };
+
+    template <typename InputIt>
+    void srand(InputIt first, InputIt last) {
+        auto b = std::begin(rc_.randrsl);
+        auto e = std::end(rc_.randrsl);
+
+        auto i = std::transform(first, last, b, e, [] (const auto & a) {
+            return T(a);
+        });
+
+        rc_.randa = rc_.randrsl[0];
+        rc_.randb = rc_.randrsl[1];
+        rc_.randc = rc_.randrsl[2];
+
+        while( i != e ) {
+            *i = T(0);
+
+            if( i - 4 >= b )
+                shuffle(rc_.randa, rc_.randb, rc_.randc, i[-4], i[-3], i[-2], i[-1], i[0]);
+
+            i++;
+        }
+
+        randinit(&rc_, true);
+    }
+
+    template <typename InputIt>
+    void init(InputIt first, InputIt last) {
+        srand(first, last);
+    }
 
     void srand(const void * data, size_t count) {
         auto l = count < sizeof(rc_.randrsl) ? count : sizeof(rc_.randrsl);

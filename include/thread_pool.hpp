@@ -115,7 +115,7 @@ public:
 
             std::unique_ptr<T> worker(p_worker);
             worker_ptr.release();
-            workers_.emplace(std::make_pair(p_worker, worker.get()));
+            workers_.emplace(std::make_pair(p_worker, p_worker));
             worker.release();
 #ifndef NDEBUG
             if( workers_.size() > max_threads_stat_ )

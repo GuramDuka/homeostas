@@ -39,81 +39,13 @@
 #include <string>
 #include <ostream>
 #include <iomanip>
+#include <array>
 #include <vector>
 //------------------------------------------------------------------------------
-#include "numeric/ii.hpp"
 #include "std_ext.hpp"
 //------------------------------------------------------------------------------
 namespace std {
 //------------------------------------------------------------------------------
-typedef vector<uint8_t> blob;
-//------------------------------------------------------------------------------
-inline std::string blob2string(
-    const blob & b,
-    const char * abc = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-    char delimiter = '-',
-    size_t interval = 9)
-{
-    std::string s;
-    size_t l = ::strlen(abc), i = 0;
-
-    nn::integer a(b.data(), b.size()), d = l, mod;
-
-    while( a.is_notz() ) {
-        a = a.div(l, &mod);
-        s.push_back(abc[size_t(mod)]);
-
-        if( delimiter != '\0' && interval != 0 && ++i == interval ) {
-            s.push_back(delimiter);
-            i = 0;
-        }
-    }
-
-    if( delimiter != '\0' && interval != 0 && s.back() == delimiter )
-        s.pop_back();
-
-    return s;
-}
-//---------------------------------------------------------------------------
-inline blob string2blob(const std::string & s,
-    const char * abc = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-{
-    size_t l = ::strlen(abc);
-    nn::integer a(0), m(1);
-
-    for( const auto & c : s ) {
-        const char * p = ::strchr(abc, c);
-
-        if( p == nullptr )
-            continue;
-
-        a += m * nn::integer(p - abc);
-        m *= l;
-    }
-
-    blob result;
-
-    for( size_t i = 0; i < a.size(); i++ )
-        result.push_back(((const blob::value_type *) a.data()) [i]);
-
-    return result;
-}
-//---------------------------------------------------------------------------
-inline string blob2hex(const blob & b)
-{
-    ostringstream s;
-
-    s.fill('0');
-    s.width(2);
-    s.unsetf(ios::dec);
-    s.setf(ios::hex | ios::uppercase);
-
-    for( const auto & c : b )
-        s << /*setw(2) <<*/ uint16_t(c);
-
-    return s.str();
-}
-//---------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 class variant {
@@ -124,7 +56,8 @@ public:
         Integer = 2,
         Real    = 3,
         Text    = 4,
-        Blob    = 5
+        Blob    = 5,
+        Key512  = 6
     };
 
     ~variant() {}
@@ -155,6 +88,9 @@ public:
                     break;
                 case Blob    :
                     new (placeholder_) blob(*reinterpret_cast<const blob *>(o.placeholder_));
+                    break;
+                case Key512  :
+                    new (placeholder_) key512(*reinterpret_cast<const key512 *>(o.placeholder_));
                     break;
                 default:
                     throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
@@ -191,6 +127,9 @@ public:
                     break;
                 case Blob    :
                     new (placeholder_) blob(move(*reinterpret_cast<blob *>(o.placeholder_)));
+                    break;
+                case Key512  :
+                    new (placeholder_) key512(move(*reinterpret_cast<key512 *>(o.placeholder_)));
                     break;
                 default:
                     throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
@@ -248,11 +187,6 @@ public:
         return *this;
     }
 
-    template <typename T>
-    const T & reference() const {
-        return *reinterpret_cast<const T *>(placeholder_);
-    }
-
     template <typename T,
         typename enable_if<
             is_same<T, QVariant>::value
@@ -277,6 +211,10 @@ public:
         return T();
     }
 
+    QVariant toQVariant() const {
+        return get<QVariant>();
+    }
+
     template <typename T,
         typename enable_if<
             is_same<T, QString>::value
@@ -289,9 +227,9 @@ public:
             case Boolean :
                 return *reinterpret_cast<const bool *>(placeholder_) ? "true" : "false";
             case Integer :
-                return QString::fromStdString(to_string(*reinterpret_cast<const int64_t *>(placeholder_)));
+                return QString::fromStdString(std::to_string(*reinterpret_cast<const int64_t *>(placeholder_)));
             case Real    :
-                return QString::fromStdString(to_string(*reinterpret_cast<const double *>(placeholder_)));
+                return QString::fromStdString(std::to_string(*reinterpret_cast<const double *>(placeholder_)));
             case Text    :
                 return QString::fromStdString(*reinterpret_cast<const string *>(placeholder_));
             default:
@@ -299,6 +237,10 @@ public:
         }
 
         return T();
+    }
+
+    QString toQString() const {
+        return get<QString>();
     }
 #endif
 
@@ -321,6 +263,9 @@ public:
             case Blob    :
                 reinterpret_cast<blob *>(placeholder_)->~blob();
                 break;
+            case Key512  :
+                reinterpret_cast<key512 *>(placeholder_)->~key512();
+                break;
             default:
                 throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
         }
@@ -328,6 +273,20 @@ public:
         type_ = Null;
 
         return *this;
+    }
+
+    template <typename T,
+        typename enable_if<
+            is_same<T, bool>::value ||
+            is_same<T, int64_t>::value ||
+            is_same<T, double>::value ||
+            is_same<T, string>::value ||
+            is_same<T, blob>::value ||
+            is_same<T, key512>::value
+        >::type * = nullptr
+    >
+    const T & reference() const {
+        return *reinterpret_cast<const T *>(placeholder_);
     }
 
     template <typename T,
@@ -401,6 +360,20 @@ public:
         return *this;
     }
 
+    variant & operator = (const key512 & v) {
+        clear();
+        new (placeholder_) key512(v);
+        type_ = Key512;
+        return *this;
+    }
+
+    variant & operator = (key512 && v) {
+        clear();
+        new (placeholder_) key512(move(v));
+        type_ = Key512;
+        return *this;
+    }
+
     variant & operator = (const nullptr_t &) {
         clear();
         return *this;
@@ -450,6 +423,14 @@ public:
     }
 
     variant(blob && v) : type_(Null) {
+        *this = move(v);
+    }
+
+    variant(const key512 & v) : type_(Null) {
+        *this = v;
+    }
+
+    variant(key512 && v) : type_(Null) {
         *this = move(v);
     }
 
@@ -549,9 +530,9 @@ public:
             case Boolean :
                 return *reinterpret_cast<const bool *>(placeholder_) ? "true" : "false";
             case Integer :
-                return to_string(*reinterpret_cast<const int64_t *>(placeholder_));
+                return std::to_string(*reinterpret_cast<const int64_t *>(placeholder_));
             case Real    :
-                return to_string(*reinterpret_cast<const double *>(placeholder_));
+                return std::to_string(*reinterpret_cast<const double *>(placeholder_));
             case Text    :
                 return *reinterpret_cast<const string *>(placeholder_);
             default:
@@ -579,6 +560,24 @@ public:
         return T();
     }
 
+    template <typename T,
+        typename enable_if<
+            is_base_of<T, key512>::value && !is_const<T>::value
+        >::type * = nullptr
+    >
+    T get() const {
+        switch( type_ ) {
+            case Null    :
+                break;
+            case Key512    :
+                return *reinterpret_cast<const key512 *>(placeholder_);
+            default:
+                throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
+        }
+
+        return T();
+    }
+
     const auto & type() const {
         return type_;
     }
@@ -588,7 +587,7 @@ public:
         return *this;
     }
 
-    variant cast(Type type) {
+    variant cast(Type type) const {
         if( type_ != type ) {
             switch( type ) {
                 case Null    :
@@ -603,6 +602,8 @@ public:
                     return get<string>();
                 case Blob    :
                     return get<blob>();
+                case Key512  :
+                    return get<key512>();
                 default:
                     throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
             }
@@ -619,14 +620,50 @@ public:
         return type_ != Null;
     }
 
+    bool to_bool() const {
+        if( type_ == Boolean )
+            return get<bool>();
+        return cast(Boolean).get<bool>();
+    }
+
+    int64_t to_int() const {
+        if( type_ == Integer )
+            return get<int64_t>();
+        return cast(Integer).get<int64_t>();
+    }
+
+    double to_real() const {
+        if( type_ == Real )
+            return get<double>();
+        return cast(Real).get<double>();
+    }
+
+    std::string to_string() const {
+        if( type_ == Text )
+            return get<std::string>();
+        return cast(Text).get<std::string>();
+    }
+
+    blob to_blob() const {
+        if( type_ == Blob )
+            return get<blob>();
+        return cast(Blob).get<blob>();
+    }
+
+    key512 to_digest() const {
+        if( type_ == Key512 )
+            return get<key512>();
+        return cast(Key512).get<key512>();
+    }
 protected:
     union {
         uint8_t placeholder_[
-            xmax(sizeof(blob),
+            xmax(sizeof(key512),
+                xmax(sizeof(blob),
                      xmax(sizeof(double),
-                              xmax(sizeof(int64_t),
-                                       xmax(sizeof(bool),
-                                                sizeof(string)))))];
+                        xmax(sizeof(int64_t),
+                            xmax(sizeof(bool),
+                                sizeof(string))))))];
     };
 #ifndef NDEBUG
     const bool & bool_          = *reinterpret_cast<const bool *>(placeholder_);
@@ -634,6 +671,7 @@ protected:
     const double & real_        = *reinterpret_cast<const double *>(placeholder_);
     const std::string & string_ = *reinterpret_cast<const std::string *>(placeholder_);
     const blob & blob_          = *reinterpret_cast<const blob *>(placeholder_);
+    const key512 & digest_      = *reinterpret_cast<const key512 *>(placeholder_);
 #endif
     Type type_;
 };
@@ -642,15 +680,10 @@ inline auto to_string(const variant & v) {
     return v.get<string>();
 }
 //------------------------------------------------------------------------------
-template <class _Elem, class _Traits, class _Alloc> inline
+template <class _Elem, class _Traits> inline
 basic_ostream<_Elem, _Traits> & operator << (
     basic_ostream<_Elem, _Traits> & ss,
     const variant & v)
-{
-    return ss << v.get<string>();
-}
-//------------------------------------------------------------------------------
-inline ostream & operator << (ostream & ss, const variant & v)
 {
     return ss << v.get<string>();
 }

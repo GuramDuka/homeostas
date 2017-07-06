@@ -29,10 +29,8 @@
 //------------------------------------------------------------------------------
 #include "config.h"
 //------------------------------------------------------------------------------
-#include <iterator>
-#include <vector>
-//------------------------------------------------------------------------------
 #include "locale_traits.hpp"
+#include "std_ext.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
@@ -221,20 +219,7 @@ struct integer {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-struct cdc512_data {
-    union {
-        struct {
-            uint64_t a, b, c, d, e, f, g, h;
-        };
-        uint64_t digest64[8];
-        uint8_t digest[sizeof(uint64_t) * 8];
-    };
-
-    void shuffle();
-    void shuffle(const cdc512_data & v);
-};
-//---------------------------------------------------------------------------
-struct cdc512 : public cdc512_data {
+struct cdc512 : public std::key512 {
     uint64_t p;
 
     cdc512() {
@@ -242,7 +227,21 @@ struct cdc512 : public cdc512_data {
     }
     
     cdc512(leave_uninitialized_type) {}
-    
+
+    cdc512(const std::key512 & o) : std::key512(o) {}
+
+    cdc512 & operator = (const std::key512 & o) {
+        std::key512::operator = (o);
+        return *this;
+    }
+
+    template <class InitIt, class InputIt>
+    cdc512(InitIt i_first, InitIt i_last, InputIt first, InputIt last) {
+        init(i_first, i_last);
+        update(first, last);
+        finish();
+    }
+
     template <class InputIt>
     cdc512(InputIt first, InputIt last) {
         init();
@@ -250,56 +249,32 @@ struct cdc512 : public cdc512_data {
         finish();
     }
 
-    template <class InputIt, typename Container>
-    cdc512(Container & c, InputIt first, InputIt last) {
-        init();
-        update(first, last);
-        finish();
-        c.assign(std::begin(digest), std::end(digest));
-    }
-
-    void init();
-    void update(const void * data, uintptr_t size);
-    void finish();
-
-    template <typename Container>
-    void finish(Container & c) {
-        finish();
-        c.assign(std::begin(digest), std::end(digest));
+    template <typename InputIt>
+    auto & init(InputIt first, InputIt last) {
+        std::copy(first, last, std::begin(*this), std::end(*this));
+        return *this;
     }
 
     template <typename InputIt>
-    void update(InputIt first, InputIt last) {
-        update(&(*first), (last - first) * sizeof(*first));
+    auto & update(InputIt first, InputIt last) {
+        return update(&(*first), std::distance(first, last) * sizeof(*first));
     }
 
-    template <typename InputIt, typename Container>
-    void flush(Container & c, InputIt first, InputIt last) {
-        update(first, last);
-        finish();
-        c.assign(std::begin(digest), std::end(digest));
-    }
-    
-    auto begin() {
-        return std::begin(digest);
-    }
+    cdc512 & init();
+    cdc512 & update(const void * data, uintptr_t size);
+    cdc512 & finish();
 
-    auto end() {
-        return std::end(digest);
-    }
-    
-    std::string to_string() const;
+    /*std::string to_string() const;
 
     std::string to_short_string(
         const char * abc = nullptr,
         char delimiter = '\0',
         size_t interval = 0) const;
 
-    void from_short_string(const std::string & s, const char * abc = nullptr);
+    void from_short_string(const std::string & s, const char * abc = nullptr);*/
 
-    void generate_fast_entropy();
-    void generate_entropy(std::vector<uint8_t> * p_entropy = nullptr);
-    static std::string generate_prime();
+    cdc512 & generate_entropy_fast();
+    cdc512 & generate_entropy(std::vector<uint8_t> * p_entropy = nullptr);
 };
 //------------------------------------------------------------------------------
 namespace tests {

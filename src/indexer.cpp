@@ -588,9 +588,6 @@ void directory_indexer::reindex(
     };
 
     std::unordered_map<std::string, parent_dir> parents;
-
-    typedef std::vector<uint8_t> blob;
-
     sqlite3pp::transaction tx(&db);
 
     auto ms2ns = [] (auto ms) {
@@ -613,7 +610,7 @@ void directory_indexer::reindex(
         uint64_t entry_id,
         uint64_t blk_no,
         uint64_t mtim,
-        const blob & block_digest)
+        const std::key512 & block_digest)
     {
         auto bind = [&] (auto & st) {
             st.bind("entry_id", entry_id);
@@ -766,7 +763,6 @@ void directory_indexer::reindex(
 
         uint64_t blk_no = 0;
         std::vector<uint8_t> buf(block_size);
-        blob block_digest;
 
         for(;;) {//while( !in.eof() ) {
             if( p_shutdown != nullptr && *p_shutdown ) {
@@ -784,10 +780,14 @@ void directory_indexer::reindex(
             st_blk_sel.bind("entry_id", entry_id);
             st_blk_sel.bind("block_no", blk_no);
             auto i = st_blk_sel.begin();
+            cdc512 blk_ctx(leave_uninitialized);
 
             if( i ) {
                 bmtim = i->get<uint64_t>("mtime");
-                block_digest = i->get<decltype(block_digest)>("digest");
+                blk_ctx = i->get<std::key512>("digest");
+            }
+            else {
+                blk_ctx.init();
             }
 
             if( bmtim == 0 || bmtim != mtim ) {
@@ -812,11 +812,13 @@ void directory_indexer::reindex(
                 //if( size_t(r) < block_size )
                 //    std::memset(&buf[r], 0, block_size - r);
 
-                cdc512 blk_ctx(block_digest, buf.cbegin(), buf.cbegin() + r);
-                update_block_digest(entry_id, blk_no, mtim, block_digest);
+                blk_ctx.update(std::begin(buf), std::begin(buf) + r);
+                blk_ctx.finish();
+
+                update_block_digest(entry_id, blk_no, mtim, blk_ctx);
             }
 
-            file_ctx.update(block_digest.cbegin(), block_digest.cend());
+            file_ctx.update(std::begin(blk_ctx), std::end(blk_ctx));
         }
 
         st_blk_del.bind("entry_id", entry_id);
@@ -884,10 +886,8 @@ void directory_indexer::reindex(
                 cdc512 ctx;
 
                 if( update_blocks(ctx, dr.path_name_, entry_id, fmtim, block_size) ) {
-                    blob digest;
-                    ctx.finish(digest);
-
-                    st_upd_after.bind("digest", digest, sqlite3pp::nocopy);
+                    ctx.finish();
+                    st_upd_after.bind("digest", ctx, sqlite3pp::nocopy);
                 }
             }
             else {

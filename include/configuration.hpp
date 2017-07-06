@@ -183,7 +183,8 @@ protected:
 //------------------------------------------------------------------------------
 class configuration {
 public:
-    configuration() {}
+    ~configuration();
+    configuration();
 
     static auto instance() {
         static configuration singleton;
@@ -251,11 +252,11 @@ public:
     };
 
     QVariant get(const QString & varName, const QVariant * p_defVal) {
-        return get(varName.toStdString().c_str(), p_defVal != nullptr ? std::variant(*p_defVal) : std::variant()).get<QVariant>();
+        return get(varName.toStdString().c_str(), p_defVal != nullptr ? std::variant(*p_defVal) : std::variant()).toQVariant();
     }
 
     QVariant get(const QString & varName, const QVariant & defVal) {
-        return get(varName.toStdString().c_str(), std::variant(defVal)).get<QVariant>();
+        return get(varName.toStdString().c_str(), std::variant(defVal)).toQVariant();
     }
 
     auto & set(const QString & varName, const QVariant & val) {
@@ -266,9 +267,19 @@ public:
         return exists(var_name.toStdString().c_str());
     }
 #endif
+
+    auto & detach_db() {
+        st_sel_ = nullptr;
+        st_sel_by_pid_ = nullptr;
+        st_ins_ = nullptr;
+        st_upd_ = nullptr;
+        db_ = nullptr;
+        return *this;
+    }
+
 private:
-    configuration(const configuration &);
-    void operator = (const configuration &);
+    configuration(const configuration &) = delete;
+    void operator = (const configuration &) = delete;
 
     void connect_db();
 
@@ -291,6 +302,8 @@ private:
                 return i->get<const char *>("value");
             case std::variant::Blob    :
                 return i->get<std::blob>("value");
+            case std::variant::Key512    :
+                return i->get<std::key512>("value");
             default                    :
                 throw std::xruntime_error("Invalid variant type", __FILE__, __LINE__);
         }
@@ -358,6 +371,10 @@ private:
                 case std::variant::Blob            :
                     st->bind("value_type", int8_t(std::variant::Blob));
                     st->bind("value_l", val.reference<std::blob>(), sqlite3pp::nocopy);
+                    break;
+                case std::variant::Key512          :
+                    st->bind("value_type", int8_t(std::variant::Key512));
+                    st->bind("value_l", val.reference<std::key512>(), sqlite3pp::nocopy);
                     break;
                 default                         :
                     throw std::xruntime_error("Invalid variant type", __FILE__, __LINE__);

@@ -72,11 +72,15 @@
 #include <iostream>
 #include <algorithm>
 #include <locale>
+#include <iterator>
+#include <functional>
 //------------------------------------------------------------------------------
 #include "port.hpp"
 #include "locale_traits.hpp"
 #include "std_ext.hpp"
 #include "scope_exit.hpp"
+#include "cdc512.hpp"
+#include "rand.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
@@ -933,13 +937,7 @@ public:
     }
 
     template <typename T,
-        typename std::enable_if<std::is_base_of<T, std::array<typename T::value_type,
-#if __GNUG__
-            T::_Nm
-#elif _MSC_VER
-            T::_Size
-#endif
-            >>::value>::type * = nullptr
+        typename std::enable_if<std::is_array<T>::value>::type * = nullptr
     >
     T recv(size_t size = 0) {
         T buffer;
@@ -954,21 +952,28 @@ public:
         >::type * = nullptr
     >
     T recv(size_t size = ~size_t(0), size_t max_recv = RX_MAX_BYTES) {
-        typedef typename T::value_type VT;
-        T buffer;
-        VT * buf = (VT *) alloca(max_recv);
-        size_t buf_size = max_recv - (max_recv % sizeof(VT));
-        buf_size *= sizeof(VT);
+        T buffer, buf;
+        buf.resize(max_recv / sizeof(T) + (max_recv % sizeof(T) ? 1 : 0));
+        size_t buf_size = buf.size() * sizeof(T);
 
         for(;;) {
-            auto r = recv(buf, 0, buf_size);
+            auto r = recv((void *) buf.data(), 0, buf_size);
 
             if( socket_errno_ != SocketSuccess || r == 0 )
                 break;
 
-            r -= r % sizeof(VT);
+            auto remainder = r % sizeof(T);
 
-            buffer.append(buf, r);
+            if( remainder != 0 ) {
+                auto rr = recv((uint8_t *) buf.data() + r, remainder, remainder);
+
+                if( socket_errno_ != SocketSuccess || rr == 0 )
+                    break;
+
+                r += rr;
+            }
+
+            buffer.insert(std::end(buffer), std::begin(buf), std::end(buf));
 
             if( size == 0 )
                 break;
@@ -2025,8 +2030,7 @@ public:
     }
 
     static std::shared_ptr<active_socket> shared() {
-        std::unique_ptr<active_socket> uniq(new active_socket);
-        return std::move(uniq);
+        return std::make_unique<active_socket>();
     }
 protected:
 private:
@@ -2306,481 +2310,6 @@ private:
     passive_socket(const passive_socket & basic_socket);
     void operator = (const passive_socket &);
 };
-//------------------------------------------------------------------------------
-////////////////////////////////////////////////////////////////////////////////
-//------------------------------------------------------------------------------
-template <class _Elem, class _Traits>
-class basic_socket_streambuf : public std::basic_streambuf<_Elem, _Traits> {
-public:
-#if __GNUG__
-    using typename std::basic_streambuf<_Elem, _Traits>::__streambuf_type;
-    using typename __streambuf_type::traits_type;
-    using typename __streambuf_type::char_type;
-    using typename __streambuf_type::int_type;
-
-    using __streambuf_type::gptr;
-    using __streambuf_type::egptr;
-    using __streambuf_type::gbump;
-    using __streambuf_type::setg;
-    using __streambuf_type::eback;
-    using __streambuf_type::pbase;
-    using __streambuf_type::pptr;
-    using __streambuf_type::epptr;
-    using __streambuf_type::pbump;
-    using __streambuf_type::setp;
-#endif
-
-    virtual ~basic_socket_streambuf() {
-        overflow(traits_type::eof()); // flush write buffer
-    }
-
-    basic_socket_streambuf(basic_socket & socket) : basic_socket_streambuf(&socket) {}
-
-    basic_socket_streambuf(basic_socket * socket) : socket_(socket) {
-        setg(gbuf_.data(), gbuf_.data() + gbuf_.size(), gbuf_.data() + gbuf_.size());
-        setp(pbuf_.data(), pbuf_.data() + pbuf_.size());
-    }
-protected:
-    virtual std::streamsize showmanyc() {
-        // return the number of chars in the input sequence
-        if( gptr() != nullptr && gptr() < egptr() )
-            return egptr() - gptr();
-
-        return 0;
-    }
-
-    virtual std::streamsize xsgetn(char_type * s, std::streamsize n) {
-        int rval = showmanyc();
-
-        if( rval >= n ) {
-            memcpy(s, gptr(), n * sizeof(char_type));
-            gbump(n);
-            return n;
-        }
-
-        memcpy(s, gptr(), rval * sizeof(char_type));
-        gbump(rval);
-
-        if( underflow() != traits_type::eof() )
-            return rval + xsgetn(s + rval, n - rval);
-
-        return rval;
-    }
-
-    virtual int_type underflow() {
-        assert( gptr() != nullptr );
-        // input stream has been disabled
-        // return traits_type::eof();
-
-        if( gptr() >= egptr() ) {
-            auto exceptions_safe = socket_->exceptions();
-            at_scope_exit( socket_->exceptions(exceptions_safe) );
-            socket_->exceptions(false);
-
-            auto r = socket_->recv(eback(), 0, gbuf_.size() * sizeof(char_type));
-
-            if( r <= 0 )
-                return traits_type::eof();
-
-            // reset input buffer pointers
-            setg(gbuf_.data(), gbuf_.data(), gbuf_.data() + r);
-        }
-
-        return *gptr();
-    }
-
-    virtual int_type uflow() {
-        auto ret = underflow();
-
-        if( ret != traits_type::eof() )
-            gbump(1);
-
-        return ret;
-    }
-
-    virtual int_type pbackfail(int_type c = traits_type::eof()) {
-        c = c;
-        return traits_type::eof();
-    }
-
-    virtual std::streamsize xsputn(const char_type * s, std::streamsize n) {
-        std::streamsize x = 0;
-
-        while( n != 0 ) {
-            auto wval = epptr() - pptr();
-            auto mval = std::min(wval, decltype(wval) (n));
-
-            memcpy(pptr(), s, mval * sizeof(char_type));
-            pbump(mval);
-
-            n -= mval;
-            s += mval;
-            x += mval;
-
-            if( n == 0 || overflow() == traits_type::eof() )
-                break;
-        }
-
-        return x;
-    }
-
-    virtual int_type overflow(int_type c = traits_type::eof()) {
-        // if pbase () == 0, no write is allowed and thus return eof.
-        // if c == eof, we sync the output and return 0.
-        // if pptr () == epptr (), buffer is full and thus sync the output,
-        //                         insert c into buffer, and return c.
-        // In all cases, if error happens, throw exception.
-
-        if( pbase() == nullptr )
-            return traits_type::eof();
-
-        if( c == traits_type::eof() )
-            return sync();
-
-        if( pptr() == epptr() )
-            sync();
-
-        *pptr() = char_type(c);
-        pbump(1);
-
-        return c;
-    }
-
-    virtual int sync() {
-        // returns ​0​ on success, -1 otherwise.
-        auto wval = pptr() - pbase();
-
-        // we have some data to flush
-        if( wval != 0 ) {
-            auto exceptions_safe = socket_->exceptions();
-            at_scope_exit( socket_->exceptions(exceptions_safe) );
-            socket_->exceptions(false);
-
-            auto w = socket_->send((const void *) pbase(), wval * sizeof(char_type));
-
-            if( w != wval * sizeof(char_type) )
-                return -1;
-
-            // reset output buffer pointers
-            setp(pbuf_.data(), pbuf_.data() + pbuf_.size());
-        }
-
-        return 0;
-    }
-
-    basic_socket * socket_;
-
-    std::array<char_type, RX_MAX_BYTES / sizeof(char_type)> gbuf_;
-    std::array<char_type, TX_MAX_BYTES / sizeof(char_type)> pbuf_;
-};
-//------------------------------------------------------------------------------
-typedef basic_socket_streambuf<char, std::char_traits<char>> socket_streambuf;
-//------------------------------------------------------------------------------
-////////////////////////////////////////////////////////////////////////////////
-//------------------------------------------------------------------------------
-template <class _Elem, class _Traits>
-class basic_socket_istream : public std::basic_istream<_Elem, _Traits> {
-public:
-#if __GNUG__
-    using typename std::basic_istream<_Elem, _Traits>::__istream_type;
-    using typename __istream_type::__streambuf_type;
-    using typename __istream_type::traits_type;
-    using typename __istream_type::int_type;
-
-    using __istream_type::exceptions;
-    using __istream_type::unsetf;
-    using __istream_type::rdbuf;
-    using __istream_type::setstate;
-#endif
-
-    basic_socket_istream(basic_socket_streambuf<_Elem, _Traits> * sbuf) :
-        std::basic_istream<_Elem, _Traits>(sbuf
-#if _MSC_VER
-            , std::ios::binary
-#endif
-        )
-    {
-        // http://en.cppreference.com/w/cpp/io/basic_ios/exceptions
-        exceptions(std::ios::eofbit | std::ios::failbit | std::ios::badbit);
-        unsetf(std::ios::skipws);
-        unsetf(std::ios::unitbuf);
-    }
-
-    auto & delimiter(const int_type & t) {
-        delimiter_.clear();
-        delimiter_.push_back(t);
-        return *this;
-    }
-
-    template <class _Alloc>
-    auto & delimiter(const std::basic_string<_Elem, _Traits, _Alloc> & t) {
-        delimiter_.clear();
-        for( const auto & c : t )
-            delimiter_.push_back(traits_type::to_int_type(t));
-        return *this;
-    }
-
-    auto & delimiter(const _Elem * t) {
-        delimiter_.clear();
-        while( *t != _Elem() ) {
-            delimiter_.push_back(traits_type::to_int_type(*t));
-            t++;
-        }
-        return *this;
-    }
-
-    const auto & delimiter() const {
-        return delimiter_;
-    }
-protected:
-    std::vector<int_type> delimiter_;
-};
-//------------------------------------------------------------------------------
-} // namespace homeostas
-//------------------------------------------------------------------------------
-namespace std {
-//------------------------------------------------------------------------------
-template <class _Elem, class _Traits, class _Alloc> inline
-homeostas::basic_socket_istream<_Elem, _Traits> & getline(
-    homeostas::basic_socket_istream<_Elem, _Traits> & ss,
-    basic_string<_Elem, _Traits, _Alloc> & s,
-    const _Elem d)
-{
-    getline(*static_cast<basic_istream<_Elem, _Traits> *>(&ss), s, d);
-    return ss;
-}
-//------------------------------------------------------------------------------
-template <class _Elem, class _Traits, class _Alloc> inline
-homeostas::basic_socket_istream<_Elem, _Traits> & operator >> (
-    homeostas::basic_socket_istream<_Elem, _Traits> & ss,
-    basic_string<_Elem, _Traits, _Alloc> & s)
-{
-    const auto & delimiter = ss.delimiter();
-    const auto b = delimiter.begin(), e = delimiter.end();
-
-    getline(ss, s, _Elem(*b));
-
-    auto i = b + 1;
-
-    while( i != e && ss ) {
-        auto c = ss.get();
-
-        if( c == _Traits::eof() )
-            break;
-
-        if( _Elem(c) != *i ) {
-            s.push_back(_Elem(c));
-            basic_string<_Elem, _Traits, _Alloc> t;
-            getline(ss, t, _Elem(*(i = b)));
-            s += t;
-        }
-
-        i++;
-    }
-
-    return ss;
-}
-//------------------------------------------------------------------------------
-template <class _Elem, class _Traits, class _Alloc> inline
-homeostas::basic_socket_istream<_Elem, _Traits> & operator >> (
-    homeostas::basic_socket_istream<_Elem, _Traits> & ss,
-    basic_ostringstream<_Elem, _Traits, _Alloc> & s)
-{
-    basic_string<_Elem, _Traits, _Alloc> t;
-    ss >> t;
-    s << t;
-    return ss;
-}
-//------------------------------------------------------------------------------
-} // namespace std
-//------------------------------------------------------------------------------
-namespace homeostas {
-//------------------------------------------------------------------------------
-////////////////////////////////////////////////////////////////////////////////
-//------------------------------------------------------------------------------
-template <class _Elem, class _Traits>
-class basic_socket_ostream : public std::basic_ostream<_Elem, _Traits> {
-public:
-#if __GNUG__
-    using typename std::basic_ostream<_Elem, _Traits>::__ostream_type;
-    using typename __ostream_type::__streambuf_type;
-    using typename __ostream_type::traits_type;
-    using typename __ostream_type::int_type;
-
-    using __ostream_type::exceptions;
-    using __ostream_type::unsetf;
-    using __ostream_type::rdbuf;
-    using __ostream_type::setstate;
-#endif
-
-    basic_socket_ostream(basic_socket_streambuf<_Elem, _Traits> * sbuf) :
-        std::basic_ostream<_Elem, _Traits>(sbuf
-#if _MSC_VER
-            , std::ios::binary
-#endif
-        )
-    {
-        // http://en.cppreference.com/w/cpp/io/basic_ios/exceptions
-        exceptions(std::ios::failbit | std::ios::badbit);
-        unsetf(std::ios::skipws);
-        unsetf(std::ios::unitbuf);
-    }
-
-    //template <typename T,
-    //    typename = std::enable_if_t<
-    //        std::is_base_of<T, std::basic_string<typename T::value_type, typename T::traits_type, typename T::allocator_type>>::value &&
-    //        std::is_same<typename T::value_type, _Elem>::value &&
-    //        std::is_same<typename T::traits_type, _Traits>::value
-    //    >
-    //>
-    //auto & operator << (const T & s) {
-    //    // send a null-terminated string
-    //    *static_cast<std::basic_ostream<_Elem, _Traits> *>(this) << (s) << std::ends;
-    //    return *this;
-    //}
-
-    //typedef std::basic_ostream<_Elem, _Traits> & (* __func_manipul_type)(std::basic_ostream<_Elem, _Traits> &);
-
-    //basic_socket_ostream<_Elem, _Traits> & operator << (__func_manipul_type f) {
-
-    //template <typename T,
-    //    typename = std::enable_if_t<
-    //        std::is_base_of<T, std::basic_ostream<_Elem, _Traits>>::value
-    //    >
-    //>
-    //basic_socket_ostream<_Elem, _Traits> & operator << (T & (* f)(T &)) {
-    //    (*f) (*this);
-    //    return *this;
-    //}
-
-    basic_socket_ostream<_Elem, _Traits> & write(const _Elem * s) {
-        static_cast<std::basic_ostream<_Elem, _Traits> *>(this)->write(s, slen(s));
-        return *this;
-    }
-
-    template <class _Alloc> inline
-    basic_socket_ostream<_Elem, _Traits> & write(const std::basic_string<_Elem, _Traits, _Alloc> & s) {
-        static_cast<std::basic_ostream<_Elem, _Traits> *>(this)->write(s.c_str(), s.size());
-        return *this;
-    }
-
-    auto & noends() {
-        ends_.clear();
-        return *this;
-    }
-
-    auto & ends(const int_type & t) {
-        ends_.clear();
-        ends_.push_back(traits_type::to_int_type(t));
-        return *this;
-    }
-
-    template <class _Alloc>
-    auto & ends(const std::basic_string<_Elem, _Traits, _Alloc> & t) {
-        ends_.clear();
-        for( const auto & c : t )
-            ends_.push_back(traits_type::to_int_type(_Elem()));
-        return *this;
-    }
-
-    const auto & ends() const {
-        return ends_;
-    }
-
-protected:
-    std::vector<int_type> ends_;
-
-    //enum StringTxType {
-    //    StringTxNull     = 1,
-    //    StringTxCRLF     = 2,
-    //    StringTxLF       = 3,
-    //    StringTxCR       = 4,
-    //    StringTxCustom   = 5,
-    //};
-};
-//------------------------------------------------------------------------------
-} // namespace homeostas
-//------------------------------------------------------------------------------
-namespace std {
-//------------------------------------------------------------------------------
-template <class _Elem, class _Traits, class _Alloc> inline
-homeostas::basic_socket_ostream<_Elem, _Traits> & operator << (
-    homeostas::basic_socket_ostream<_Elem, _Traits> & ss,
-    const basic_string<_Elem, _Traits, _Alloc> & s)
-{
-    auto & bos = *static_cast<basic_ostream<_Elem, _Traits> *>(&ss);
-
-    bos << s;
-
-    for( const auto & c : ss.ends() )
-        bos << _Traits::to_char_type(c);
-
-    return ss;
-}
-//------------------------------------------------------------------------------
-template <class _Elem, class _Traits, class _Alloc> inline
-homeostas::basic_socket_ostream<_Elem, _Traits> & operator << (
-    homeostas::basic_socket_ostream<_Elem, _Traits> & ss,
-    const basic_ostringstream<_Elem, _Traits, _Alloc> & s)
-{
-    auto & bos = *static_cast<basic_ostream<_Elem, _Traits> *>(&ss);
-
-    bos << s.str();
-
-    for( const auto & c : ss.ends() )
-        bos << _Traits::to_char_type(c);
-
-    return ss;
-}
-//------------------------------------------------------------------------------
-} // namespace std
-//------------------------------------------------------------------------------
-namespace homeostas {
-//------------------------------------------------------------------------------
-////////////////////////////////////////////////////////////////////////////////
-//------------------------------------------------------------------------------
-template <class _Elem, class _Traits>
-class basic_socket_stream :
-    public basic_socket_streambuf<_Elem, _Traits>,
-    public basic_socket_istream<_Elem, _Traits>,
-    public basic_socket_ostream<_Elem, _Traits>
-{
-public:
-    typedef _Traits traits_type;
-
-    template <typename T,
-        typename = std::enable_if_t<
-            std::is_base_of<T, std::unique_ptr<typename T::element_type, typename T::deleter_type>>::value
-        >
-    >
-    basic_socket_stream(T & socket) : basic_socket_stream(*socket) {}
-
-    template <typename T,
-        typename = std::enable_if_t<
-            std::is_base_of<T, std::shared_ptr<typename T::element_type>>::value
-        >
-    >
-    basic_socket_stream(T socket) : basic_socket_stream(*socket) {}
-
-    basic_socket_stream(basic_socket & socket) : basic_socket_stream(&socket) {}
-
-    basic_socket_stream(basic_socket * socket) :
-        basic_socket_streambuf<_Elem, _Traits>(socket),
-        basic_socket_istream<_Elem, _Traits>(this),
-        basic_socket_ostream<_Elem, _Traits>(this) {
-    }
-
-    auto exceptions() const {
-        return basic_socket_istream<_Elem, _Traits>::exceptions();
-    }
-
-    void exceptions(std::ios_base::iostate except) {
-        basic_socket_istream<_Elem, _Traits>::exceptions(except);
-        basic_socket_ostream<_Elem, _Traits>::exceptions(except);
-    }
-};
-//------------------------------------------------------------------------------
-typedef basic_socket_stream<char, std::char_traits<char>> socket_stream;
 //------------------------------------------------------------------------------
 namespace tests {
 //------------------------------------------------------------------------------

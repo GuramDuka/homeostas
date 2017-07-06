@@ -73,7 +73,7 @@ QString Homeostas::newUniqueId()
         homeostas::cdc512 ctx;
         ctx.generate_entropy(&entropy);
 
-        auto s = std::blob2string(std::blob(std::begin(ctx), std::end(ctx)));
+        auto s = std::to_string(ctx);
         auto p = std::begin(s) + s.rfind('-') + 1;
 
         if( std::distance(p, std::end(s)) >= 9 )
@@ -88,7 +88,13 @@ void Homeostas::startServer()
     if( server_ != nullptr )
         return;
 
-    server_.reset(new homeostas::server);
+    at_scope_exit( homeostas::configuration::instance()->detach_db() );
+
+    server_ = std::make_unique<homeostas::server>();
+    server_->host_public_key(
+        homeostas::configuration::instance()->get("host.public_key").to_digest());
+    server_->host_private_key(
+        homeostas::configuration::instance()->get("host.private_key").to_digest());
     server_->startup();
 }
 //------------------------------------------------------------------------------
@@ -100,25 +106,47 @@ void Homeostas::stopServer()
     server_ = nullptr;
 }
 //------------------------------------------------------------------------------
-void Homeostas::startTrackers()
+void Homeostas::startClient()
 {
+    if( client_ != nullptr )
+        return;
+
+    client_ = std::make_unique<homeostas::client>();
+    client_->startup();
+}
+//------------------------------------------------------------------------------
+void Homeostas::stopClient()
+{
+    if( client_ == nullptr )
+        return;
+
+    client_ = nullptr;
+}
+//------------------------------------------------------------------------------
+void Homeostas::loadTrackers()
+{
+    at_scope_exit( homeostas::configuration::instance()->detach_db() );
     auto config = homeostas::configuration::instance();
 
-    if( !config->exists("host.private_id") ) {
+    if( !config->exists("host.private_key") ) {
         const auto id = Homeostas::instance()->newUniqueId().toStdString();
-        config->set("host.private_id", std::string2blob(id));
+        config->set("host.private_key", std::stokey512(id));
     }
 
-    if( !config->exists("host.public_id") ) {
+    if( !config->exists("host.public_key") ) {
         const auto id = Homeostas::instance()->newUniqueId().toStdString();
-        config->set("host.public_id", std::string2blob(id));
+        config->set("host.public_key", std::stokey512(id));
     }
 
-    std::cerr << "private_id: " << std::blob2string(config->get("host.private_id").get<std::blob>()) << std::endl;
-    std::cerr << "public_id : " << std::blob2string(config->get("host.public_id").get<std::blob>()) << std::endl;
+    std::cerr << "private key: "
+        << std::to_string(config->get("host.private_key").to_digest()) << std::endl;
+    std::cerr << "public key : "
+        << std::to_string(config->get("host.public_key").to_digest()) << std::endl;
 #if QT_CORE_LIB
-    qDebug().noquote().nospace() << "private_id: " << QString::fromStdString(std::blob2string(config->get("host.private_id").get<std::blob>()));
-    qDebug().noquote().nospace() << "public_id : " << QString::fromStdString(std::blob2string(config->get("host.public_id").get<std::blob>()));
+    qDebug().noquote().nospace() << "private key: "
+        << QString::fromStdString(std::to_string(config->get("host.private_key").to_digest()));
+    qDebug().noquote().nospace() << "public key : "
+        << QString::fromStdString(std::to_string(config->get("host.public_key").to_digest()));
 #endif
 
 #ifndef NDEBUG
@@ -133,21 +161,24 @@ void Homeostas::startTrackers()
             "c:\\hiew"
 #endif
         );
-        //std::shared_ptr<homeostas::directory_tracker> dt(new homeostas::directory_tracker);
-        //dt->dir_user_defined_name("hiew");
-        //dt->dir_path_name("c:\\hiew");
-        //trackers_.emplace_back(dt);
     }
 #endif
 
     for( const auto & i : config->get_tree("tracker") ) {
         const auto & tracker = i.second;
         const auto & path = tracker["path"];
-        DirectoriesTrackersModel::instance()->append(
-           tracker.value().get<QString>(),
-           path.value().get<QString>()
-        );
+
+        trackers_.emplace_back(std::make_shared<homeostas::directory_tracker>(
+            tracker.value().to_string(), path.value().to_string()));
     }
+}
+//------------------------------------------------------------------------------
+void Homeostas::startTrackers()
+{
+    loadTrackers();
+
+    for( const auto & t : trackers_ )
+        t->startup();
 }
 //------------------------------------------------------------------------------
 void Homeostas::stopTrackers()
@@ -236,8 +267,6 @@ void DirectoriesTrackersModel::append(const QString &directoryUserDefinedName, c
         directoryPathName.toStdString());
 
     tracks.insert(tracks.begin() + row, dt);
-
-    dt->startup();
 
     endInsertRows();
 }
