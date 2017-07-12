@@ -50,65 +50,48 @@ public:
         shutdown();
     }
 
+    discoverer() {}
+
     static auto instance() {
         static discoverer singleton;
         return &singleton;
     }
 
-    bool started() const {
-        return thread_ != nullptr;
-    }
-
     void startup();
     void shutdown();
 
-    auto & pubs(const std::vector<socket_addr> & pubs) {
-        pubs_ = pubs;
-        return *this;
-    }
+    discoverer & announce_host(const std::key512 & public_key,
+        const std::vector<socket_addr> * p_addrs = nullptr,
+        const std::key512 * p_p2p_key = nullptr);
 
-    const auto & pubs() const {
-        return pubs_;
-    }
-
-    std::vector<socket_addr> discover_host_addresses(const std::key512 & public_key) {
-        std::vector<socket_addr> t;
-
-        return t;
-    }
-
-    std::key512 discover_p2p_key(const std::key512 & public_key) {
-
-        throw std::xruntime_error("Unknown public key", __FILE__, __LINE__);
-
-        return std::key512();
-    }
+    std::vector<socket_addr> discover_host(const std::key512 & public_key, std::key512 * p_p2p_key = nullptr);
+    std::key512 discover_host_p2p_key(const std::key512 & public_key);
 
     auto & detach_db() {
-        st_sel_ = nullptr;
-        st_sel_by_pid_ = nullptr;
-        st_ins_ = nullptr;
-        st_upd_ = nullptr;
+        st_sel_peer_ = nullptr;
+        st_ins_peer_ = nullptr;
+        st_upd_peer_ = nullptr;
         db_ = nullptr;
         return *this;
     }
 protected:
     void connect_db();
-    void listener();
     void worker(std::shared_ptr<active_socket> socket);
 
-    std::vector<socket_addr> pubs_;
-    std::unique_ptr<std::thread> thread_;
-    std::unique_ptr<std::mutex> mtx_;
-    std::unique_ptr<std::condition_variable> cv_;
+    std::unique_ptr<active_socket> socket_;
+    std::shared_future<void> worker_result_;
+    std::mutex mtx_;
+    std::condition_variable cv_;
 
     std::unique_ptr<sqlite3pp::database> db_;
-    std::unique_ptr<sqlite3pp::query> st_sel_;
-    std::unique_ptr<sqlite3pp::query> st_sel_by_pid_;
-    std::unique_ptr<sqlite3pp::command> st_ins_;
-    std::unique_ptr<sqlite3pp::command> st_upd_;
+    std::unique_ptr<sqlite3pp::query>    st_sel_peer_;
+    std::unique_ptr<sqlite3pp::command>  st_ins_peer_;
+    std::unique_ptr<sqlite3pp::command>  st_upd_peer_;
 
     bool shutdown_;
+private:
+    discoverer(const discoverer &) = delete;
+    void operator = (const discoverer &) = delete;
 };
 //------------------------------------------------------------------------------
 namespace tests {

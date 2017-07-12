@@ -47,15 +47,13 @@
 #include <cerrno>
 #include <ctime>
 //------------------------------------------------------------------------------
-#include "locale_traits.hpp"
+#include "std_ext.hpp"
 //------------------------------------------------------------------------------
-#if _WIN32 && _MSC_VER
+#if _WIN32
 //------------------------------------------------------------------------------
 #   ifndef CLOCK_REALTIME
 #       define CLOCK_REALTIME 0
 #   endif
-//------------------------------------------------------------------------------
-extern "C" int clock_gettime(int dummy, struct timespec * ct);
 //------------------------------------------------------------------------------
 #endif
 //------------------------------------------------------------------------------
@@ -87,7 +85,9 @@ std::string temp_path(bool no_back_slash = false);
 std::string temp_name(std::string dir = std::string(), std::string pfx = std::string());
 std::string get_cwd(bool no_back_slash = false);
 std::string path2rel(const std::string & path, bool no_back_slash = false);
+int clock_gettime(int dummy, struct timespec & ct);
 uint64_t clock_gettime_ns();
+uint64_t entropy_fast();
 //------------------------------------------------------------------------------
 } // namespace homeostas
 //------------------------------------------------------------------------------

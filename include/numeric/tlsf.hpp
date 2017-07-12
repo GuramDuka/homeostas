@@ -155,9 +155,11 @@ inline int tlsf_fls(size_t word)
 #include <intrin.h>
 
 #pragma intrinsic(_BitScanReverse)
-#pragma intrinsic(_BitScanReverse64)
 #pragma intrinsic(_BitScanForward)
-#pragma intrinsic(_BitScanForward64)
+#if _M_X64
+#   pragma intrinsic(_BitScanReverse64)
+#   pragma intrinsic(_BitScanForward64)
+#endif
 
 inline int tlsf_fls(size_t word)
 {

@@ -30,9 +30,7 @@
 #include "config.h"
 //------------------------------------------------------------------------------
 #include "port.hpp"
-#include "locale_traits.hpp"
 #include "std_ext.hpp"
-#include "scope_exit.hpp"
 #include "cdc512.hpp"
 #include "rand.hpp"
 //------------------------------------------------------------------------------
@@ -41,7 +39,7 @@ namespace homeostas {
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 struct light_cipher : protected cdc512 {
-    light_cipher() : cdc512(leave_uninitialized) {}
+    light_cipher() : cdc512(std::leave_uninitialized) {}
 
     void init(const std::key512 & key) {
         cdc512::operator =(key);
@@ -89,7 +87,12 @@ struct strong_cipher : protected rand<7, uint64_t> {
 
         std::transform(first, last, d_first, d_last, [&] (const auto & a) {
             if( mask_ring == std::end(mask) ) {
-                *reinterpret_cast<value_type *>(mask) = this->get();
+#if BYTE_ORDER == LITTLE_ENDIAN
+                mask_v = this->get();
+#endif
+#if BYTE_ORDER == BIG_ENDIAN
+                mask_v = htole64(this->get());
+#endif
                 mask_ring = std::begin(mask);
             }
 
@@ -102,7 +105,10 @@ struct strong_cipher : protected rand<7, uint64_t> {
         encode(std::begin(s_range), std::end(s_range), std::begin(d_range), std::end(d_range));
     }
 
-    uint8_t mask[sizeof(value_type)];
+    union {
+        uint8_t mask[sizeof(value_type)];
+        value_type mask_v;
+    };
     decltype(std::begin(mask)) mask_ring;
 };
 //------------------------------------------------------------------------------

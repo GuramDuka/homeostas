@@ -26,5 +26,48 @@
 //------------------------------------------------------------------------------
 namespace std {
 //------------------------------------------------------------------------------
+std::wstring str2wstr(const std::string & str)
+{
+    try {
+#if _WIN32
+        size_t sz = str.size();
+
+        if( sz > INT_MAX )
+            throw std::range_error("String is too big");
+
+        size_t charsNeeded = MultiByteToWideChar(
+            CP_UTF8, 0, str.c_str(), int(sz), NULL, 0);
+
+        if( charsNeeded == 0 )
+            throw std::range_error("Failed converting UTF-8 string to UTF-16");
+
+        std::wstring buffer;
+
+        buffer.resize(charsNeeded);
+
+        int charsConverted = MultiByteToWideChar(
+            CP_UTF8, 0, str.c_str(), int(sz), &buffer[0], int(buffer.size()));
+
+        if( charsConverted == 0 )
+            throw std::range_error("Failed converting UTF-8 string to UTF-16");
+
+        return buffer;
+#else
+        throw std::range_error("Not implemented");
+#endif
+    }
+    catch( std::range_error & ) {
+        size_t length = str.length();
+        std::wstring result;
+
+        result.reserve(length);
+
+        for( auto c : str )
+            result.push_back(c);
+
+        return result;
+    }
+}
+//------------------------------------------------------------------------------
 } // namespace std
 //------------------------------------------------------------------------------

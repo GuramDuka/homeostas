@@ -75,7 +75,7 @@ cdc512 & cdc512::update(const void * data, uintptr_t size)
     return *this;
 }
 //---------------------------------------------------------------------------
-cdc512 & cdc512::finish()
+cdc512 & cdc512::final()
 {
     if( p ) {
         std::shuffler512 pad;
@@ -190,7 +190,7 @@ cdc512 & cdc512::generate_entropy_fast()
 
     init();
     update(&a, sizeof(a));
-    finish();
+    final();
 
     return *this;
 }

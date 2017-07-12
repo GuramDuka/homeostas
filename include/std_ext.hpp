@@ -40,6 +40,9 @@
 #include <locale>
 #include <cerrno>
 #include <iterator>
+#include <type_traits>
+#include <string>
+#include <memory>
 #if QT_CORE_LIB
 #   include <QString>
 #endif
@@ -47,6 +50,90 @@
 #include "numeric/ii.hpp"
 //------------------------------------------------------------------------------
 namespace std {
+//------------------------------------------------------------------------------
+inline size_t slen(const char * s) {
+    return ::strlen(s);
+}
+//------------------------------------------------------------------------------
+inline size_t slen(const wchar_t * s) {
+    return ::wcslen(s);
+}
+//------------------------------------------------------------------------------
+inline auto scat(char * s1, const char * s2) {
+    return ::strcat(s1, s2);
+}
+//------------------------------------------------------------------------------
+inline auto scat(wchar_t * s1, const wchar_t * s2) {
+    return ::wcscat(s1, s2);
+}
+//------------------------------------------------------------------------------
+inline auto scmp(const char * s1, const char * s2) {
+    return ::strcmp(s1, s2);
+}
+//------------------------------------------------------------------------------
+inline auto scmp(const wchar_t * s1, const wchar_t * s2) {
+    return ::wcscmp(s1, s2);
+}
+//------------------------------------------------------------------------------
+template <typename C>
+struct container_traits {
+private:
+    template <typename _Elem, size_t N>
+    static char (&is_array_helper(const array<_Elem, N> &))[1];
+    static char (&is_array_helper(...))[2];
+
+    template <typename _Elem, typename _Alloc>
+    static char (&is_vector_helper(const vector<_Elem, _Alloc> &))[1];
+    static char (&is_vector_helper(...))[2];
+
+    template <typename _Elem, typename _Traits , typename _Alloc>
+    static char (&is_string_helper(const basic_string<_Elem, _Traits, _Alloc> &))[1];
+    static char (&is_string_helper(...))[2];
+
+    template <typename _Ty>
+    static char (&is_unique_ptr_helper(const unique_ptr<_Ty> &))[1];
+    static char (&is_unique_ptr_helper(...))[2];
+
+    template <typename _Ty>
+    static char (&is_shared_ptr_helper(const shared_ptr<_Ty> &))[1];
+    static char (&is_shared_ptr_helper(...))[2];
+
+    template <typename U//,
+        //typename = typename iterator_traits<U>::difference_type,
+        //typename = typename iterator_traits<U>::pointer,
+        //typename = typename iterator_traits<U>::reference,
+        //typename = typename iterator_traits<U>::value_type,
+        //typename = typename iterator_traits<U>::iterator_category
+    >
+    static char (&is_iterator_helper(const iterator_traits<U> &))[1];
+    static char (&is_iterator_helper(...))[2];
+public:
+    constexpr static bool is_array =
+        sizeof(is_array_helper(declval<C>())) == sizeof(char[1]);
+    constexpr static bool is_vector =
+        sizeof(is_vector_helper(declval<C>())) == sizeof(char[1]);
+    constexpr static bool is_array_or_vector =
+        sizeof(is_array_helper(declval<C>())) == sizeof(char[1]) ||
+        sizeof(is_vector_helper(declval<C>())) == sizeof(char[1]);
+    constexpr static bool is_string =
+        sizeof(is_string_helper(declval<C>())) == sizeof(char[1]);
+    constexpr static bool is_string_or_vector =
+        sizeof(is_string_helper(declval<C>())) == sizeof(char[1]) ||
+        sizeof(is_vector_helper(declval<C>())) == sizeof(char[1]);
+    constexpr static bool is_array_or_vector_or_string =
+        sizeof(is_array_helper(declval<C>())) == sizeof(char[1]) ||
+        sizeof(is_vector_helper(declval<C>())) == sizeof(char[1]) ||
+        sizeof(is_string_helper(declval<C>())) == sizeof(char[1]);
+    constexpr static bool is_unique_ptr =
+        sizeof(is_unique_ptr_helper(declval<C>())) == sizeof(char[1]);
+    constexpr static bool is_shared_ptr =
+        sizeof(is_shared_ptr_helper(declval<C>())) == sizeof(char[1]);
+    constexpr static bool is_unique_or_shared_ptr =
+        sizeof(is_unique_ptr_helper(declval<C>())) == sizeof(char[1]) ||
+        sizeof(is_shared_ptr_helper(declval<C>())) == sizeof(char[1]);
+    constexpr static bool is_iterator =
+        sizeof(is_iterator_helper(declval<C>())) == sizeof(char[1]);
+};
 //------------------------------------------------------------------------------
 template <typename T> inline
 constexpr const T & xmin(const T & a, const T & b) {
@@ -453,26 +540,8 @@ inline double stod(const string & s, size_t * p_idx = nullptr) {
 //------------------------------------------------------------------------------
 #endif
 //------------------------------------------------------------------------------
-template <class H> inline
-H ihash(const char * val) {
-    H h = 0;
-
-    while( *val != '\0' ) {
-        h += *val++;
-        h += h << 9;
-        h ^= h >> 5;
-    }
-
-    h += h << 3;
-    h ^= h >> 10;
-    h += h << 14;
-
-    return h;
-}
-//------------------------------------------------------------------------------
 template <typename H, typename T> inline
-H ihash(const T & v) {
-    H h = 0;
+H ihash(const T & v, H h = H(0)) {
     const uint8_t * val = reinterpret_cast<const uint8_t *>(&v);
 
     for( auto i = sizeof(v); i > 0; i-- ) {
@@ -488,36 +557,34 @@ H ihash(const T & v) {
     return h;
 }
 //------------------------------------------------------------------------------
-template <typename H, typename InputIt> inline
-H ihash(InputIt first, InputIt last) {
-    H h = 0;
-
+template <typename H, typename InputIt,
+    typename enable_if<container_traits<InputIt>::is_iterator>::type * = nullptr
+> inline
+H ithash(InputIt first, InputIt last, H h = H(0)) {
     while( first != last ) {
-        h += *first++;
-        h += h << 9;
-        h ^= h >> 5;
+        h += H(*first++);
+        h += h << (sizeof(h) * CHAR_BIT / 4 + 1);
+        h ^= h >> (sizeof(h) * CHAR_BIT / 5 - 1);
     }
 
-    h += h << 3;
-    h ^= h >> 10;
-    h += h << 14;
+    h += h << (sizeof(h) * CHAR_BIT / 10);
+    h ^= h >> (sizeof(h) * CHAR_BIT / 3);
+    h += h << (sizeof(h) * CHAR_BIT / 3 - 2);
 
     return h;
 }
 //------------------------------------------------------------------------------
 template <typename H, typename InputIt, typename PredT> inline
-H ihash(InputIt first, InputIt last, PredT pred) {
-    H h = 0;
-
+H ithash(InputIt first, InputIt last, PredT pred, H h = H(0)) {
     while( first != last ) {
         h += H(pred(*first++));
-        h += h << 9;
-        h ^= h >> 5;
+        h += h << (sizeof(h) * CHAR_BIT / 4 + 1);
+        h ^= h >> (sizeof(h) * CHAR_BIT / 5 - 1);
     }
 
-    h += h << 3;
-    h ^= h >> 10;
-    h += h << 14;
+    h += h << (sizeof(h) * CHAR_BIT / 10);
+    h ^= h >> (sizeof(h) * CHAR_BIT / 3);
+    h += h << (sizeof(h) * CHAR_BIT / 3 - 2);
 
     return h;
 }
@@ -530,7 +597,7 @@ inline uint64_t rhash(uint64_t x) {
     x *= uint64_t(0xf81bc437f81bc437);
     return x;
 }
-
+//------------------------------------------------------------------------------
 inline uint32_t rhash(uint32_t x) {
     x ^= 0xf7f7f7f7;
     x *= 0x8364abf7;
@@ -539,7 +606,7 @@ inline uint32_t rhash(uint32_t x) {
     x *= 0xf81bc437;
     return x;
 }
-
+//------------------------------------------------------------------------------
 inline uint16_t rhash(uint16_t x) {
     x ^= 0xf7f7;
     x *= 0xabf7;
@@ -678,6 +745,65 @@ ptr_range<T> make_range(T * ptr, size_t length) {
     return ptr_range<T>(ptr, length);
 }
 //------------------------------------------------------------------------------
+template <typename InpT, class OutputIt> inline
+OutputIt copy(ptr_range<InpT> inp, OutputIt d_first, OutputIt d_last)
+{
+    return copy(inp.begin(), inp.end(), d_first, d_last);
+}
+//------------------------------------------------------------------------------
+template <typename InpT, typename OutputIt, typename InserterIt> inline
+OutputIt copy(ptr_range<InpT> inp, OutputIt d_first, OutputIt d_last,
+              InserterIt inserter)
+{
+    return copy(inp.begin(), inp.end(), d_first, d_last, inserter);
+}
+//------------------------------------------------------------------------------
+template <class InpT, class OutputIt, class UnaryOperation> inline
+OutputIt transform(ptr_range<InpT> inp,
+                   OutputIt d_first, OutputIt d_last,
+                   UnaryOperation unary_op)
+{
+    return transform(inp.begin(), inp.end(), d_first, d_last, unary_op);
+}
+//------------------------------------------------------------------------------
+template <class InpT, class OutputIt, class InserterIt, class UnaryOperation> inline
+OutputIt transform(ptr_range<InpT> inp,
+                   OutputIt d_first, OutputIt d_last,
+                   InserterIt inserter,
+                   UnaryOperation unary_op)
+{
+    return transform(inp.begin(), inp.end(), d_first, d_last, inserter, unary_op);
+}
+//------------------------------------------------------------------------------
+template <typename InpT, typename OutT, typename OutputIt> inline
+OutputIt copy(ptr_range<InpT> inp, ptr_range<OutT> out)
+{
+    return copy(inp.begin(), inp.end(), out.begin(), out.end());
+}
+//------------------------------------------------------------------------------
+template <typename InpT, typename OutT, typename OutputIt, typename InserterIt> inline
+OutputIt copy(ptr_range<InpT> inp, ptr_range<OutT> out, InserterIt inserter)
+{
+    return copy(inp.begin(), inp.end(), out.begin(), out.end(), inserter);
+}
+//------------------------------------------------------------------------------
+template <typename InpT, typename OutT, typename OutputIt, class UnaryOperation> inline
+OutputIt transform(ptr_range<InpT> inp,
+                   ptr_range<OutT> out,
+                   UnaryOperation unary_op)
+{
+    return transform(inp.begin(), inp.end(), out.begin(), out.end(), unary_op);
+}
+//------------------------------------------------------------------------------
+template <typename InpT, typename OutT, typename OutputIt, class InserterIt, class UnaryOperation> inline
+OutputIt transform(ptr_range<InpT> inp,
+                   ptr_range<OutT> out,
+                   InserterIt inserter,
+                   UnaryOperation unary_op)
+{
+    return transform(inp.begin(), inp.end(), out.begin(), out.end(), inserter, unary_op);
+}
+//------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 struct shuffler512 {
@@ -715,10 +841,20 @@ public:
 
     static constexpr size_type ssize() noexcept { return 64; }
 
+    ~key512() {}
     key512() : base() {}
+    key512(std::initializer_list<value_type> l) {
+        copy(l.begin(), l.end(), begin(), end());
+    }
+
+    key512(leave_uninitialized_type) {}
+
+    key512(zero_initialized_type) {
+        base::fill(value_type(0));
+    }
 
     key512(const key512 & o) : base(o) {}
-    //digest(digest && o) : base(o) {}
+    key512(key512 && o) : base(o) {}
 
     key512(const ptr_range<uint8_t> & range) {
         std::copy(std::begin(range), std::end(range), begin(), end());
@@ -781,14 +917,14 @@ public:
     }
 };
 //------------------------------------------------------------------------------
-inline std::string to_string(
+inline string to_string(
     const key512 & b,
     const char * abc = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
     char delimiter = '-',
     size_t interval = 9)
 {
-    std::string s;
-    size_t l = ::strlen(abc), i = 0;
+    string s;
+    size_t l = slen(abc), i = 0;
 
     nn::integer a(b.data(), b.size()), d = l, mod;
 
@@ -811,7 +947,7 @@ inline std::string to_string(
 inline key512 stokey512(const std::string & s,
     const char * abc = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 {
-    size_t l = ::strlen(abc);
+    size_t l = slen(abc);
     nn::integer a(0), m(1);
 
     for( const auto & c : s ) {
@@ -832,13 +968,19 @@ inline key512 stokey512(const std::string & s,
 class blob : public vector<uint8_t> {
 public:
     typedef vector<uint8_t> base;
+    typedef typename base::iterator iterator;
     typedef typename base::value_type value_type;
+    typedef typename base::pointer pointer;
+    typedef typename base::const_pointer const_pointer;
     typedef typename base::allocator_type allocator_type;
 
     blob() : base() {}
 
     blob(const blob & o) : base(o) {}
     blob(blob && o) : base(o) {}
+
+    template <class _Iter>
+    blob(_Iter _First, _Iter _Last) : base(_First, _Last) {}
 
     blob & operator = (const blob & o) {
         base::operator = (o);
@@ -851,7 +993,7 @@ public:
     }
 };
 //------------------------------------------------------------------------------
-inline string blob2hex(const blob & b)
+inline string to_string(const blob & b)
 {
     ostringstream s;
 
@@ -866,7 +1008,57 @@ inline string blob2hex(const blob & b)
     return s.str();
 }
 //---------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+template <typename Lambda>
+class AtScopeExit {
+private:
+    const Lambda & lambda_;
+public:
+    ~AtScopeExit() { lambda_(); }
+    AtScopeExit(const Lambda & lambda) : lambda_(lambda) {}
+};
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+template <typename Lambda>
+class ScopeExit {
+private:
+    Lambda lambda_;
+    void operator = (const ScopeExit<Lambda> & obj);
+public:
+    ~ScopeExit() noexcept {
+        lambda_();
+    }
+    ScopeExit(const Lambda lambda) noexcept : lambda_(lambda) {}
+    ScopeExit(const ScopeExit<Lambda> & obj) noexcept : lambda_(obj.lambda_) {}
+    ScopeExit(ScopeExit<Lambda> && obj) noexcept : lambda_(obj.lambda_) {}
+};
+//------------------------------------------------------------------------------
+template <typename Lambda> inline
+auto scope_exit(Lambda lambda) {
+    return ScopeExit<Lambda>(lambda);
+}
+//------------------------------------------------------------------------------
+#define AtScopeExit_INTERNAL2(lname, aname, ...) \
+    const auto lname = [&]() { __VA_ARGS__; }; \
+    std::AtScopeExit<decltype(lname)> aname(lname);
+
+#define AtScopeExit_TOKENPASTE(x, y) AtScopeExit_ ## x ## y
+
+#define AtScopeExit_INTERNAL1(ctr, ...) \
+    AtScopeExit_INTERNAL2(AtScopeExit_TOKENPASTE(func_, ctr), \
+                   AtScopeExit_TOKENPASTE(instance_, ctr), __VA_ARGS__)
+
+#define at_scope_exit(...) AtScopeExit_INTERNAL1(__COUNTER__, __VA_ARGS__)
+//------------------------------------------------------------------------------
 } // namespace std
+//------------------------------------------------------------------------------
+namespace homeostas { namespace tests {
+//------------------------------------------------------------------------------
+void locale_traits_test();
+//------------------------------------------------------------------------------
+}} // namespace homeostas::tests
 //------------------------------------------------------------------------------
 #endif // STD_EXT_HPP_INCLUDED
 //------------------------------------------------------------------------------

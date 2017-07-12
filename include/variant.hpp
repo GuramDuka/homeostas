@@ -75,22 +75,46 @@ public:
                 case Null    :
                     break;
                 case Boolean :
+#if __GNUG__
+                    b_ = o.b_;
+#else
                     new (placeholder_) bool(*reinterpret_cast<const bool *>(o.placeholder_));
+#endif
                     break;
                 case Integer :
+#if __GNUG__
+                    i_ = o.i_;
+#else
                     new (placeholder_) int64_t(*reinterpret_cast<const int64_t *>(o.placeholder_));
+#endif
                     break;
                 case Real    :
+#if __GNUG__
+                    r_ = o.r_;
+#else
                     new (placeholder_) double(*reinterpret_cast<const double *>(o.placeholder_));
+#endif
                     break;
                 case Text    :
+#if __GNUG__
+                    new (&s_) string(o.s_);
+#else
                     new (placeholder_) string(*reinterpret_cast<const string *>(o.placeholder_));
+#endif
                     break;
                 case Blob    :
+#if __GNUG__
+                    new (&l_) blob(o.l_);
+#else
                     new (placeholder_) blob(*reinterpret_cast<const blob *>(o.placeholder_));
+#endif
                     break;
                 case Key512  :
+#if __GNUG__
+                    new (&k_) key512(o.k_);
+#else
                     new (placeholder_) key512(*reinterpret_cast<const key512 *>(o.placeholder_));
+#endif
                     break;
                 default:
                     throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
@@ -114,22 +138,46 @@ public:
                 case Null    :
                     break;
                 case Boolean :
+#if __GNUG__
+                    b_ = o.b_;
+#else
                     new (placeholder_) bool(move(*reinterpret_cast<bool *>(o.placeholder_)));
+#endif
                     break;
                 case Integer :
+#if __GNUG__
+                    i_ = o.i_;
+#else
                     new (placeholder_) int64_t(move(*reinterpret_cast<int64_t *>(o.placeholder_)));
+#endif
                     break;
                 case Real    :
+#if __GNUG__
+                    r_ = o.r_;
+#else
                     new (placeholder_) double(move(*reinterpret_cast<double *>(o.placeholder_)));
+#endif
                     break;
                 case Text    :
+#if __GNUG__
+                    new (&s_) string(move(o.s_));
+#else
                     new (placeholder_) string(move(*reinterpret_cast<string *>(o.placeholder_)));
+#endif
                     break;
                 case Blob    :
+#if __GNUG__
+                    new (&l_) blob(move(o.l_));
+#else
                     new (placeholder_) blob(move(*reinterpret_cast<blob *>(o.placeholder_)));
+#endif
                     break;
                 case Key512  :
+#if __GNUG__
+                    new (&k_) key512(move(o.k_));
+#else
                     new (placeholder_) key512(move(*reinterpret_cast<key512 *>(o.placeholder_)));
+#endif
                     break;
                 default:
                     throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
@@ -197,13 +245,29 @@ public:
             case Null    :
                 break;
             case Boolean :
+#if __GNUG__
+                return b_;
+#else
                 return *reinterpret_cast<const bool *>(placeholder_);
+#endif
             case Integer :
+#if __GNUG__
+                return QVariant::fromValue(i_);
+#else
                 return QVariant::fromValue(*reinterpret_cast<const int64_t *>(placeholder_));
+#endif
             case Real    :
+#if __GNUG__
+                return r_;
+#else
                 return *reinterpret_cast<const double *>(placeholder_);
+#endif
             case Text    :
+#if __GNUG__
+                return QString::fromStdString(s_);
+#else
                 return QString::fromStdString(*reinterpret_cast<const string *>(placeholder_));
+#endif
             default:
                 throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
         }
@@ -225,13 +289,29 @@ public:
             case Null    :
                 break;
             case Boolean :
+#if __GNUG__
+                return b_ ? "true" : "false";
+#else
                 return *reinterpret_cast<const bool *>(placeholder_) ? "true" : "false";
+#endif
             case Integer :
+#if __GNUG__
+                return QString::fromStdString(std::to_string(i_));
+#else
                 return QString::fromStdString(std::to_string(*reinterpret_cast<const int64_t *>(placeholder_)));
+#endif
             case Real    :
+#if __GNUG__
+                return QString::fromStdString(std::to_string(r_));
+#else
                 return QString::fromStdString(std::to_string(*reinterpret_cast<const double *>(placeholder_)));
+#endif
             case Text    :
+#if __GNUG__
+                return QString::fromStdString(s_);
+#else
                 return QString::fromStdString(*reinterpret_cast<const string *>(placeholder_));
+#endif
             default:
                 throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
         }
@@ -258,13 +338,25 @@ public:
                 //reinterpret_cast<double *>(placeholder_)->~double();
                 break;
             case Text    :
+#if __GNUG__
+                s_.~basic_string();
+#else
                 reinterpret_cast<string *>(placeholder_)->~basic_string();
+#endif
                 break;
             case Blob    :
+#if __GNUG__
+                l_.~vector();
+#else
                 reinterpret_cast<blob *>(placeholder_)->~blob();
+#endif
                 break;
             case Key512  :
+#if __GNUG__
+                k_.~key512();
+#else
                 reinterpret_cast<key512 *>(placeholder_)->~key512();
+#endif
                 break;
             default:
                 throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
@@ -275,19 +367,88 @@ public:
         return *this;
     }
 
-    template <typename T,
-        typename enable_if<
-            is_same<T, bool>::value ||
-            is_same<T, int64_t>::value ||
-            is_same<T, double>::value ||
-            is_same<T, string>::value ||
-            is_same<T, blob>::value ||
-            is_same<T, key512>::value
-        >::type * = nullptr
-    >
-    const T & reference() const {
+    template <typename T, typename enable_if<is_same<T, bool>::value>::type * = nullptr>
+    const T & ref() const {
+#ifndef NDEBUG
+        assert( type_ == Boolean );
+#endif
+#if __GNUG__
+        return b_;
+#else
         return *reinterpret_cast<const T *>(placeholder_);
+#endif
     }
+
+    template <typename T, typename enable_if<is_same<T, int64_t>::value>::type * = nullptr>
+    const T & ref() const {
+#ifndef NDEBUG
+        assert( type_ == Integer );
+#endif
+#if __GNUG__
+        return i_;
+#else
+        return *reinterpret_cast<const T *>(placeholder_);
+#endif
+    }
+
+    template <typename T, typename enable_if<is_same<T, double>::value>::type * = nullptr>
+    const T & ref() const {
+#ifndef NDEBUG
+        assert( type_ == Real );
+#endif
+#if __GNUG__
+        return r_;
+#else
+        return *reinterpret_cast<const T *>(placeholder_);
+#endif
+    }
+
+    template <typename T, typename enable_if<is_same<T, string>::value>::type * = nullptr>
+    const T & ref() const {
+#ifndef NDEBUG
+        assert( type_ == Text );
+#endif
+#if __GNUG__
+        return s_;
+#else
+        return *reinterpret_cast<const T *>(placeholder_);
+#endif
+    }
+
+    template <typename T, typename enable_if<is_same<T, blob>::value>::type * = nullptr>
+    const T & ref() const {
+#ifndef NDEBUG
+        assert( type_ == Blob );
+#endif
+#if __GNUG__
+        return l_;
+#else
+        return *reinterpret_cast<const T *>(placeholder_);
+#endif
+    }
+
+    template <typename T, typename enable_if<is_same<T, key512>::value>::type * = nullptr>
+    const T & ref() const {
+#ifndef NDEBUG
+        assert( type_ == Key512 );
+#endif
+#if __GNUG__
+        return k_;
+#else
+        return *reinterpret_cast<const T *>(placeholder_);
+#endif
+    }
+
+// !!!WARNING!!! used only for debug
+#ifndef NDEBUG
+    template <typename T>
+    const T & ref_debug() const {
+        const void * vp = placeholder_;
+        uintptr_t p = (uintptr_t) vp;
+        const void * pv = (const void *) p;
+        return *reinterpret_cast<const T *>(pv);
+    }
+#endif
 
     template <typename T,
         typename enable_if<
@@ -308,7 +469,11 @@ public:
     >
     variant & operator = (const T & v) {
         clear();
+#if __GNUG__
+        i_ = int64_t(v);
+#else
         *reinterpret_cast<int64_t *>(placeholder_) = int64_t(v);
+#endif
         type_ = Integer;
         return *this;
     }
@@ -320,56 +485,88 @@ public:
     >
     variant & operator = (const T & v) {
         clear();
+#if __GNUG__
+        r_ = double(v);
+#else
         *reinterpret_cast<double *>(placeholder_) = double(v);
+#endif
         type_ = Real;
         return *this;
     }
 
     variant & operator = (const char * v) {
         clear();
+#if __GNUG__
+        new (&s_) string(v);
+#else
         new (placeholder_) string(v);
+#endif
         type_ = Text;
         return *this;
     }
 
     variant & operator = (const string & v) {
         clear();
+#if __GNUG__
+        new (&s_) string(v);
+#else
         new (placeholder_) string(v);
+#endif
         type_ = Text;
         return *this;
     }
 
     variant & operator = (string && v) {
         clear();
-        new (placeholder_) string(move(v));
+#if __GNUG__
+        new (&s_) string(move(v));
+#else
+        new (placeholder_) string(v);
+#endif
         type_ = Text;
         return *this;
     }
 
     variant & operator = (const blob & v) {
         clear();
+#if __GNUG__
+        new (&l_) blob(v);
+#else
         new (placeholder_) blob(v);
+#endif
         type_ = Blob;
         return *this;
     }
 
     variant & operator = (blob && v) {
         clear();
-        new (placeholder_) blob(move(v));
+#if __GNUG__
+        new (&l_) blob(move(v));
+#else
+        new (placeholder_) blob(v);
+#endif
         type_ = Blob;
         return *this;
     }
 
     variant & operator = (const key512 & v) {
         clear();
+#if __GNUG__
+        new (&k_) key512(v);
+#else
         new (placeholder_) key512(v);
+#endif
         type_ = Key512;
         return *this;
     }
 
     variant & operator = (key512 && v) {
         clear();
-        new (placeholder_) key512(move(v));
+#if __GNUG__
+        new (&k_) key512(move(v));
+#else
+        new (placeholder_) key512(v);
+#endif
         type_ = Key512;
         return *this;
     }
@@ -385,7 +582,11 @@ public:
         >::type * = nullptr
     >
     variant(const T & v) : type_(Boolean) {
+#if __GNUG__
+        b_ = v;
+#else
         *reinterpret_cast<bool *>(placeholder_) = v;
+#endif
     }
 
     template <typename T,
@@ -446,14 +647,30 @@ public:
             case Null    :
                 break;
             case Boolean :
+#if __GNUG__
+                return b_;
+#else
                 return *reinterpret_cast<const bool *>(placeholder_);
+#endif
             case Integer :
+#if __GNUG__
+                return i_;
+#else
                 return *reinterpret_cast<const int64_t *>(placeholder_) != 0;
+#endif
             case Real    :
+#if __GNUG__
+                return r_;
+#else
                 return *reinterpret_cast<const double *>(placeholder_) != 0;
+#endif
             case Text    :
                 return [this] {
+#if __GNUG__
+                    const auto & s = s_;
+#else
                     const auto & s = *reinterpret_cast<const string *>(placeholder_);
+#endif
 
                     if( s.empty() || equal_case(s, "false") || equal_case(s, "no") || equal_case(s, "off") )
                         return false;
@@ -479,14 +696,30 @@ public:
             case Null    :
                 break;
             case Boolean :
-                return *reinterpret_cast<const bool *>(placeholder_) ? 1 : 0;
+#if __GNUG__
+                return b_ ? T(1) : T(0);
+#else
+                return *reinterpret_cast<const bool *>(placeholder_) ? T(1) : T(0);
+#endif
             case Integer :
+#if __GNUG__
+                return T(i_);
+#else
                 return T(*reinterpret_cast<const int64_t *>(placeholder_));
+#endif
             case Real    :
+#if __GNUG__
+                return T(r_);
+#else
                 return T(*reinterpret_cast<const double *>(placeholder_));
+#endif
             case Text    :
+#if __GNUG__
+                return stoint<T>(begin(s_), end(s_));
+#else
                 return stoint<T>(begin(*reinterpret_cast<const string *>(placeholder_)),
                     end(*reinterpret_cast<const string *>(placeholder_)));
+#endif
             default:
                 throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
         }
@@ -504,13 +737,29 @@ public:
             case Null    :
                 break;
             case Boolean :
+#if __GNUG__
+                return b_ ? T(1) : T(0);
+#else
                 return *reinterpret_cast<const bool *>(placeholder_) ? 1 : 0;
+#endif
             case Integer :
+#if __GNUG__
+                return T(i_);
+#else
                 return T(*reinterpret_cast<const int64_t *>(placeholder_));
+#endif
             case Real    :
+#if __GNUG__
+                return T(r_);
+#else
                 return T(*reinterpret_cast<const double *>(placeholder_));
+#endif
             case Text    :
+#if __GNUG__
+                return T(stod(s_));
+#else
                 return T(stod(*reinterpret_cast<const string *>(placeholder_)));
+#endif
             default:
                 throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
         }
@@ -520,7 +769,7 @@ public:
 
     template <typename T,
         typename enable_if<
-            is_base_of<T, string>::value && !is_const<T>::value
+            is_base_of<string, T>::value && !is_const<T>::value
         >::type * = nullptr
     >
     T get() const {
@@ -528,13 +777,41 @@ public:
             case Null    :
                 break;
             case Boolean :
+#if __GNUG__
+                return b_ ? "true" : "false";
+#else
                 return *reinterpret_cast<const bool *>(placeholder_) ? "true" : "false";
+#endif
             case Integer :
-                return std::to_string(*reinterpret_cast<const int64_t *>(placeholder_));
+#if __GNUG__
+                return to_string(i_);
+#else
+                return to_string(*reinterpret_cast<const int64_t *>(placeholder_));
+#endif
             case Real    :
-                return std::to_string(*reinterpret_cast<const double *>(placeholder_));
+#if __GNUG__
+                return to_string(r_);
+#else
+                return to_string(*reinterpret_cast<const double *>(placeholder_));
+#endif
             case Text    :
+#if __GNUG__
+                return s_;
+#else
                 return *reinterpret_cast<const string *>(placeholder_);
+#endif
+            case Blob    :
+#if __GNUG__
+                return to_string(l_);
+#else
+                return to_string(*reinterpret_cast<const blob *>(placeholder_));
+#endif
+            case Key512  :
+#if __GNUG__
+            return to_string(k_);
+#else
+            return to_string(*reinterpret_cast<const key512 *>(placeholder_));
+#endif
             default:
                 throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
         }
@@ -544,7 +821,7 @@ public:
 
     template <typename T,
         typename enable_if<
-            is_base_of<T, blob>::value && !is_const<T>::value
+            is_base_of<blob, T>::value && !is_const<T>::value
         >::type * = nullptr
     >
     T get() const {
@@ -552,7 +829,11 @@ public:
             case Null    :
                 break;
             case Blob    :
+#if __GNUG__
+                return l_;
+#else
                 return *reinterpret_cast<const blob *>(placeholder_);
+#endif
             default:
                 throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
         }
@@ -562,7 +843,7 @@ public:
 
     template <typename T,
         typename enable_if<
-            is_base_of<T, key512>::value && !is_const<T>::value
+            is_base_of<key512, T>::value && !is_const<T>::value
         >::type * = nullptr
     >
     T get() const {
@@ -570,7 +851,11 @@ public:
             case Null    :
                 break;
             case Key512    :
+#if __GNUG__
+                return k_;
+#else
                 return *reinterpret_cast<const key512 *>(placeholder_);
+#endif
             default:
                 throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
         }
@@ -588,28 +873,83 @@ public:
     }
 
     variant cast(Type type) const {
-        if( type_ != type ) {
-            switch( type ) {
-                case Null    :
-                    break;
-                case Boolean :
-                    return get<bool>();
-                case Integer :
-                    return get<int64_t>();
-                case Real    :
-                    return get<double>();
-                case Text    :
-                    return get<string>();
-                case Blob    :
-                    return get<blob>();
-                case Key512  :
-                    return get<key512>();
-                default:
-                    throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
-            }
+        if( type_ == type )
+            return *this;
+
+        switch( type ) {
+            case Null    :
+                break;
+            case Boolean :
+                return get<bool>();
+            case Integer :
+                return get<int64_t>();
+            case Real    :
+                return get<double>();
+            case Text    :
+                return get<string>();
+            case Blob    :
+                return get<blob>();
+            case Key512  :
+                return get<key512>();
+            default:
+                throw xruntime_error("Invalid variant type", __FILE__, __LINE__);
         }
 
         return variant();
+    }
+
+    template <typename T,
+        typename enable_if<
+            is_same<T, bool>::value
+        >::type * = nullptr
+    >
+    operator T () const {
+        return type_ == Boolean ? ref<T>() : cast(Boolean).get<T>();
+    }
+
+    template <typename T,
+        typename enable_if<
+            !is_same<T, bool>::value && is_integral<T>::value
+        >::type * = nullptr
+    >
+    operator T () const {
+        return type_ == Integer ? T(ref<int64_t>()) : cast(Integer).get<T>();
+    }
+
+    template <typename T,
+        typename enable_if<
+            is_floating_point<T>::value
+        >::type * = nullptr
+    >
+    operator T () const {
+        return type_ == Integer ? T(ref<double>()) : cast(Real).get<T>();
+    }
+
+    template <typename T,
+        typename enable_if<
+            is_base_of<string, T>::value && !is_const<T>::value
+        >::type * = nullptr
+    >
+    operator T () const {
+        return type_ == Text ? T(ref<T>()) : cast(Text).get<T>();
+    }
+
+    template <typename T,
+        typename enable_if<
+            is_base_of<blob, T>::value && !is_const<T>::value
+        >::type * = nullptr
+    >
+    operator T () const {
+        return type_ == Blob ? T(ref<T>()) : cast(Blob).get<T>();
+    }
+
+    template <typename T,
+        typename enable_if<
+            is_base_of<key512, T>::value && !is_const<T>::value
+        >::type * = nullptr
+    >
+    operator T () const {
+        return type_ == Key512 ? T(ref<T>()) : cast(Key512).get<T>();
     }
 
     bool operator == (const nullptr_t) const {
@@ -638,7 +978,7 @@ public:
         return cast(Real).get<double>();
     }
 
-    std::string to_string() const {
+    std::string to_text() const {
         if( type_ == Text )
             return get<std::string>();
         return cast(Text).get<std::string>();
@@ -650,7 +990,7 @@ public:
         return cast(Blob).get<blob>();
     }
 
-    key512 to_digest() const {
+    key512 to_key512() const {
         if( type_ == Key512 )
             return get<key512>();
         return cast(Key512).get<key512>();
@@ -664,15 +1004,15 @@ protected:
                         xmax(sizeof(int64_t),
                             xmax(sizeof(bool),
                                 sizeof(string))))))];
-    };
-#ifndef NDEBUG
-    const bool & bool_          = *reinterpret_cast<const bool *>(placeholder_);
-    const int64_t & int_        = *reinterpret_cast<const int64_t *>(placeholder_);
-    const double & real_        = *reinterpret_cast<const double *>(placeholder_);
-    const std::string & string_ = *reinterpret_cast<const std::string *>(placeholder_);
-    const blob & blob_          = *reinterpret_cast<const blob *>(placeholder_);
-    const key512 & digest_      = *reinterpret_cast<const key512 *>(placeholder_);
+#if __GNUG__
+        bool b_;
+        int64_t i_;
+        double r_;
+        string s_;
+        blob l_;
+        key512 k_;
 #endif
+    };
     Type type_;
 };
 //------------------------------------------------------------------------------

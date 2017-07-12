@@ -48,6 +48,8 @@ public:
         shutdown();
     }
 
+    client() {}
+
     static auto instance() {
         static client singleton;
         return &singleton;
@@ -69,15 +71,28 @@ public:
 
         return res;
     }
-    
+
+    auto & server_public_key(const std::key512 & key) {
+        server_public_key_ = key;
+        return *this;
+    }
+
+    const auto & server_public_key() const {
+        return server_public_key_;
+    }
 protected:
+    void worker();
+
+    std::key512 server_public_key_;
     std::function<void()> task_;
     std::unique_ptr<active_socket> socket_;
+    std::shared_future<void> worker_result_;
     std::mutex mtx_;
     std::condition_variable cv_;
     bool shutdown_;
-
-    void worker();
+private:
+    client(const client &) = delete;
+    void operator = (const client &) = delete;
 };
 //------------------------------------------------------------------------------
 namespace tests {

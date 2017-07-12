@@ -24,6 +24,7 @@
 //------------------------------------------------------------------------------
 #include "server.hpp"
 #include "client.hpp"
+#include "discoverer.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
@@ -35,7 +36,7 @@ void client::startup() {
 
     shutdown_ = false;
     socket_ = std::make_unique<active_socket>();
-    thread_pool_t::instance()->enqueue(&client::worker, this);
+    worker_result_ = thread_pool_t::instance()->enqueue(&client::worker, this);
 }
 //------------------------------------------------------------------------------
 void client::shutdown()
@@ -49,23 +50,14 @@ void client::shutdown()
     lk.unlock();
     cv_.notify_one();
 
+    worker_result_.wait();
     socket_ = nullptr;
 }
 //------------------------------------------------------------------------------
 void client::worker()
 {
-    auto wait = [&] (const std::chrono::seconds & s) {
-        std::unique_lock<std::mutex> lock(mtx_);
-        cv_.wait_for(lock, s, [&] { return shutdown_; });
-    };
-
-    homeostas::configuration config;
-    //addr.family(AF_INET).saddr4.sin_addr.s_addr = inet_addr("127.0.0.1");
-    //std::blob private_id;
-
     socket_stream ss;
-    std::key512 peer_pubic_key, peer_p2p_key;
-    std::vector<socket_addr> peer_addrs;
+    std::key512 p2p_key;
 
     ss.handshake_functor([&] (
         handshake::packet * req,
@@ -76,17 +68,20 @@ void client::worker()
 
         if( res == nullptr ) {
             // setup request before send to server
-            std::copy(std::begin(host_public_key_), std::end(host_public_key_),
-                std::begin(req->public_key), std::end(req->public_key));
-            // client fingerprint based on p2p key and server public key
-            std::key512 fingerprint = cdc512(std::begin(peer_p2p_key), std::end(peer_p2p_key),
-                std::begin(peer_pubic_key), std::end(peer_pubic_key));
-            std::copy(std::begin(fingerprint), std::end(fingerprint),
-                std::begin(req->fingerprint), std::end(req->fingerprint));
+            if( server_public_key_ != req->public_key ) {
+                req->error = handshake::ErrorInvalidHostPublicKey;
+            }
+            else {
+                // client fingerprint based on p2p key and server public key
+                std::key512 fingerprint = cdc512(std::begin(p2p_key), std::end(p2p_key),
+                    std::begin(server_public_key_), std::end(server_public_key_));
+                std::copy(std::begin(fingerprint), std::end(fingerprint),
+                    std::begin(req->fingerprint), std::end(req->fingerprint));
+            }
         }
         else if( p_local_transport_key == nullptr && p_remote_transport_key == nullptr ) {
             // server fingerprint based on p2p key and client fingerprint
-            std::key512 fingerprint = cdc512(std::begin(peer_p2p_key), std::end(peer_p2p_key),
+            std::key512 fingerprint = cdc512(std::begin(p2p_key), std::end(p2p_key),
                 std::begin(req->fingerprint), std::end(req->fingerprint));
 
             if( fingerprint == res->fingerprint ) {
@@ -99,47 +94,50 @@ void client::worker()
         }
         else {
             // server approved my fingerprint
-            *p_local_transport_key = cdc512(std::begin(peer_p2p_key), std::end(peer_p2p_key),
+            *p_local_transport_key = cdc512(std::begin(p2p_key), std::end(p2p_key),
                 std::begin(req->session_key), std::end(req->session_key));
-            *p_remote_transport_key = cdc512(std::begin(peer_p2p_key), std::end(peer_p2p_key),
+            *p_remote_transport_key = cdc512(std::begin(p2p_key), std::end(p2p_key),
                 std::begin(res->session_key), std::end(res->session_key));
         }
     });
 
+    auto wait = [&] (const std::chrono::seconds & s) {
+        std::unique_lock<std::mutex> lock(mtx_);
+        cv_.wait_for(lock, s, [&] { return shutdown_; });
+    };
+
+    discoverer d;
+
+    // set handshake parameters
+    ss.proto(handshake::ProtocolV1);
+    ss.encryption(handshake::EncryptionLight);
+    ss.encryption_option(handshake::OptionPrefer);
+    ss.compression(handshake::CompressionLZ4);
+    ss.compression_option(handshake::OptionPrefer);
+
     while( !shutdown_ ) {
         try {
-            uint16_t port = 0;
+            auto addrs = d.discover_host(server_public_key_, &p2p_key);
 
-            while( !shutdown_ ) {
-                auto p = config.get("host.port");
+            while( !shutdown_ && !addrs.empty() ) {
+                auto addr = std::find_if(std::rbegin(addrs), std::rend(addrs), [] (const auto & a) {
+                    return a.is_loopback();
+                });
 
-                if( p != nullptr ) {
-                    port = std::rhash(p.get<uint16_t>());
-                    //private_id = config.get("host.private_id").get<std::blob>();
-                    //config.detach();
-                    break;
+                if( addr == std::rend(addrs) )
+                    addr = std::rbegin(addrs);
+
+            if( addr != std::rend(addrs) ) {
+                socket_->connect(*addr);
+                addrs.erase(addr);
+
+                if( *socket_ ) {
+                    ss.reset(socket_);
+
+                    ss << "Hello" << std::flush;
+                    std::string s;
+                    ss >> s;
                 }
-
-                wait(std::chrono::seconds(1));
-            }
-
-            if( shutdown_ )
-                break;
-
-            addr.port(port);
-
-            try {
-                socket_->connect(addr);
-                ss.reset(socket_);
-                // set handshake parameters
-
-            }
-            catch( const std::exception & e ) {
-                std::cerr << e << std::endl;
-#if QT_CORE_LIB
-                qDebug().noquote().nospace() << QString::fromStdString(e.what());
-#endif
-                wait(std::chrono::seconds(3));
             }
         }
         catch( const std::exception & e ) {
@@ -147,15 +145,14 @@ void client::worker()
 #if QT_CORE_LIB
             qDebug().noquote().nospace() << QString::fromStdString(e.what());
 #endif
-            wait(std::chrono::seconds(60));
         }
         catch( ... ) {
             std::cerr << "undefined c++ exception catched" << std::endl;
 #if QT_CORE_LIB
             qDebug().noquote().nospace() << "undefined c++ exception catched";
 #endif
-            wait(std::chrono::seconds(60));
         }
+        wait(std::chrono::seconds(60));
     }
 }
 //------------------------------------------------------------------------------

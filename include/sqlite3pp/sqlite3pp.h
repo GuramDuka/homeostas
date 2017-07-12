@@ -21,6 +21,8 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+//
+// Modified by Guram Duka 2017
 
 #ifndef SQLITE3PP_H
 #define SQLITE3PP_H
@@ -37,11 +39,14 @@
 #include <string>
 #include <tuple>
 #include <type_traits>
+#include <array>
 #include <vector>
+#include <limits>
 #include <unordered_map>
 #include <memory>
 
 #include "sqlite/sqlite3.h"
+#include "std_ext.hpp"
 
 namespace sqlite3pp {
     namespace ext {
@@ -497,10 +502,23 @@ namespace sqlite3pp {
 #endif
 
         int bind(int idx, char const* value, copy_semantic fcopy) {
-            rc_ = sqlite3_bind_text(stmt_, idx, value, int(std::strlen(value)), fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC);
+            auto l = std::slen(value);
+            rc_ = sqlite3_bind_text64(stmt_, idx, value, l, fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC, SQLITE_UTF8);
             if (rc_ == SQLITE_MISUSE) {
                 sqlite3_reset(stmt_);
-                rc_ = sqlite3_bind_text(stmt_, idx, value, int(std::strlen(value)), fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC);
+                rc_ = sqlite3_bind_text64(stmt_, idx, value, l, fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC, SQLITE_UTF8);
+            }
+            if (rc_ != SQLITE_OK)
+                db_.throw_database_error();
+            return rc_;
+        }
+
+        int bind(int idx, const std::string & value, copy_semantic fcopy) {
+            auto l = value.size() * sizeof(value[0]);
+            rc_ = sqlite3_bind_text64(stmt_, idx, value.c_str(), l, fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC, SQLITE_UTF8);
+            if (rc_ == SQLITE_MISUSE) {
+                sqlite3_reset(stmt_);
+                rc_ = sqlite3_bind_text64(stmt_, idx, value.c_str(), l, fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC, SQLITE_UTF8);
             }
             if (rc_ != SQLITE_OK)
                 db_.throw_database_error();
@@ -518,18 +536,7 @@ namespace sqlite3pp {
             return rc_;
         }
 
-        int bind(int idx, std::string const& value, copy_semantic fcopy) {
-            rc_ = sqlite3_bind_text64(stmt_, idx, value.c_str(), value.size(), fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC, SQLITE_UTF8);
-            if (rc_ == SQLITE_MISUSE) {
-                sqlite3_reset(stmt_);
-                rc_ = sqlite3_bind_text64(stmt_, idx, value.c_str(), value.size(), fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC, SQLITE_UTF8);
-            }
-            if (rc_ != SQLITE_OK)
-                db_.throw_database_error();
-            return rc_;
-        }
-
-        int bind(int idx) {
+        int bind(int idx, std::nullptr_t) {
             rc_ = sqlite3_bind_null(stmt_, idx);
             if (rc_ == SQLITE_MISUSE) {
                 sqlite3_reset(stmt_);
@@ -540,11 +547,8 @@ namespace sqlite3pp {
             return rc_;
         }
 
-        int bind(int idx, std::nullptr_t) {
-            return bind(idx);
-        }
-
-        int param_name2idx(const char * name) const {
+        template <std::size_t _Sz>
+        int param_name2idx(const char (&name) [_Sz]) const {
             auto i = param_cache_.find(name);
 
             if( i == param_cache_.cend() )
@@ -557,124 +561,99 @@ namespace sqlite3pp {
             return param_name2idx(name.c_str());
         }
 
-        int bind(char const* name, bool value) {
+        template <std::size_t _Sz>
+        int bind(const char (&name) [_Sz], bool value) {
             //auto idx = sqlite3_bind_parameter_index(stmt_, name);
             return bind(param_name2idx(name), value);
         }
         
-        int bind(char const* name, int value) {
+        template <std::size_t _Sz>
+        int bind(const char (&name) [_Sz], int value) {
             //auto idx = sqlite3_bind_parameter_index(stmt_, name);
             return bind(param_name2idx(name), value);
         }
 
-        int bind(char const* name, unsigned value) {
+        template <std::size_t _Sz>
+        int bind(const char (&name) [_Sz], unsigned value) {
             //auto idx = sqlite3_bind_parameter_index(stmt_, name);
             return bind(param_name2idx(name), value);
         }
         
-        int bind(char const* name, double value) {
+        template <std::size_t _Sz>
+        int bind(const char (&name) [_Sz], double value) {
             //auto idx = sqlite3_bind_parameter_index(stmt_, name);
             return bind(param_name2idx(name), value);
         }
 
-        int bind(char const* name, long long int value) {
+        template <std::size_t _Sz>
+        int bind(const char (&name) [_Sz], long long int value) {
             //auto idx = sqlite3_bind_parameter_index(stmt_, name);
             return bind(param_name2idx(name), value);
         }
 
-        int bind(char const* name, long long unsigned value) {
+        template <std::size_t _Sz>
+        int bind(const char (&name) [_Sz], long long unsigned value) {
             //auto idx = sqlite3_bind_parameter_index(stmt_, name);
             return bind(param_name2idx(name), value);
         }
 
 #if __clang__ || __GNUG__ >= 7
-        int bind(char const* name, int64_t value) {
+        template <std::size_t _Sz>
+        int bind(const char (&name) [_Sz], int64_t value) {
             //auto idx = sqlite3_bind_parameter_index(stmt_, name);
             return bind(param_name2idx(name), value);
         }
 
-        int bind(char const* name, uint64_t value) {
+        template <std::size_t _Sz>
+        int bind(const char (&name) [_Sz], uint64_t value) {
             //auto idx = sqlite3_bind_parameter_index(stmt_, name);
             return bind(param_name2idx(name), value);
         }
 #endif
 
-        int bind(char const* name, char const* value, copy_semantic fcopy) {
+        template <std::size_t _Sz>
+        int bind(const char (&name) [_Sz], char const* value, copy_semantic fcopy) {
             //auto idx = sqlite3_bind_parameter_index(stmt_, name);
             return bind(param_name2idx(name), value, fcopy);
         }
 
-        int bind(char const* name, void const* value, int n, copy_semantic fcopy) {
+        template <std::size_t _Sz>
+        int bind(const char (&name) [_Sz], void const* value, int n, copy_semantic fcopy) {
             //auto idx = sqlite3_bind_parameter_index(stmt_, name);
             return bind(param_name2idx(name), value, n, fcopy);
         }
 
-        int bind(char const* name, std::string const& value, copy_semantic fcopy) {
+        template <std::size_t _Sz>
+        int bind(const char (&name) [_Sz], std::string const& value, copy_semantic fcopy) {
             //auto idx = sqlite3_bind_parameter_index(stmt_, name);
             return bind(param_name2idx(name), value, fcopy);
         }
 
-        int bind(char const* name) {
-            //auto idx = sqlite3_bind_parameter_index(stmt_, name);
-            return bind(param_name2idx(name));
-        }
-
-        int bind(char const* name, std::nullptr_t) {
-            return bind(param_name2idx(name));
+        template <std::size_t _Sz>
+        int bind(const char (&name) [_Sz], std::nullptr_t) {
+            return bind(param_name2idx(name), nullptr);
         }
 
         int bind(const std::string & name, std::nullptr_t) {
-            return bind(param_name2idx(name.c_str()));
-        }
-        
-        template <typename T,
-            typename std::enable_if<
-                std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value
-            >::type * = nullptr
-        >
-        int bind(const char * name, const T & value, copy_semantic fcopy) {
-            typedef typename T::value_type VT;
-            return bind(param_name2idx(name), (const void *) &value[0], int(value.size() * sizeof(VT)), fcopy);
+            return bind(param_name2idx(name.c_str()), nullptr);
         }
 
-        template <typename T,
-            typename std::enable_if<std::is_array<T>::value>::type * = nullptr
+        template <typename T, std::size_t _Sz, typename std::enable_if<
+            std::container_traits<T>::is_array_or_vector>::type * = nullptr
         >
-        int bind(const char * name, const T & value, copy_semantic fcopy) {
-            typedef typename T::value_type VT;
-            return bind(param_name2idx(name), (const void *) &value[0], int(value.size() * sizeof(VT)), fcopy);
+        int bind(const char (&name) [_Sz], const T & value, copy_semantic fcopy) {
+            if( &value == nullptr )
+                return bind(name, nullptr);
+            return bind(param_name2idx(name), value.data(), value.size() * sizeof(value[0]), fcopy);
         }
 
-        template <typename T,
-            typename std::enable_if<std::is_class<T>::value>::type * = nullptr
-        >
-        int bind(const char name [], const T & value, copy_semantic fcopy) {
-            return bind(param_name2idx(name), (const void *) &value, int(sizeof(value)), fcopy);
-        }
-
-        template <typename T,
-            typename std::enable_if<
-                std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value
-            >::type * = nullptr
+        template <typename T, std::size_t _Sz, typename std::enable_if<
+            std::container_traits<T>::is_array_or_vector>::type * = nullptr
         >
         int bind(const std::string & name, const T & value, copy_semantic fcopy) {
-            typedef typename T::value_type VT;
-            return bind(param_name2idx(name.c_str()), (const void *) &value[0], int(value.size() * sizeof(VT)), fcopy);
-        }
-
-        template <typename T,
-            typename std::enable_if<std::is_array<T>::value>::type * = nullptr
-        >
-        int bind(const std::string & name, const T & value, copy_semantic fcopy) {
-            typedef typename T::value_type VT;
-            return bind(param_name2idx(name.c_str()), (const void *) &value[0], int(value.size() * sizeof(VT)), fcopy);
-        }
-
-        template <typename T,
-            typename std::enable_if<std::is_class<T>::value>::type * = nullptr
-        >
-        int bind(const std::string & name, const T & value, copy_semantic fcopy) {
-            return bind(param_name2idx(name.c_str()), (const void *) &value, int(sizeof(value)), fcopy);
+            if( &value == nullptr )
+                return bind(name, nullptr);
+            return bind(param_name2idx(name.c_str()), value.data(), value.size() * sizeof(value[0]), fcopy);
         }
     protected:
         ~statement() {
@@ -693,8 +672,10 @@ namespace sqlite3pp {
                 prepare(stmt);
         }
 
-        int prepare_impl(char const* stmt) {
-            rc_ = sqlite3_prepare_v2(db_.db_, stmt, int(std::strlen(stmt)), &stmt_, &tail_);
+        int prepare_impl(const char * stmt) {
+            auto l = std::slen(stmt);
+            int n = int(std::min(l, decltype(l) (std::numeric_limits<int>::max())));
+            rc_ = sqlite3_prepare_v2(db_.db_, stmt, n, &stmt_, &tail_);
             if (rc_ != SQLITE_OK)
                 db_.throw_database_error();
             return rc_;
@@ -777,10 +758,10 @@ namespace sqlite3pp {
         int execute_all(int ignore_rc = -1) {
             execute(ignore_rc);
 
-            char const * sql = tail_;
+            const char * sql = tail_;
 
-            while (std::strlen(sql) > 0) { // sqlite3_complete() is broken.
-                sqlite3_stmt* old_stmt = stmt_;
+            while( std::slen(sql) > 0 ) { // sqlite3_complete() is broken.
+                sqlite3_stmt * old_stmt = stmt_;
 
                 prepare_impl(sql);
 
@@ -839,7 +820,8 @@ namespace sqlite3pp {
                 return static_cast<query_column_type>(sqlite3_column_type(cmd_->stmt_, idx));
             }
 
-            query_column_type column_type(const char * name) const {
+            template <typename T, std::size_t _Sz>
+            query_column_type column_type(const char (&name) [_Sz]) const {
                 return static_cast<query_column_type>(sqlite3_column_type(cmd_->stmt_, cmd_->column_name2idx(name)));
             }
 
@@ -851,7 +833,8 @@ namespace sqlite3pp {
                 return column_type(idx) == SQL_NIL;
             }
             
-            bool column_isnull(const char * name) const {
+            template <typename T, std::size_t _Sz>
+            bool column_isnull(const char (&name) [_Sz]) const {
                 return column_type(cmd_->column_name2idx(name)) == SQL_NIL;
             }
 
@@ -864,94 +847,61 @@ namespace sqlite3pp {
             }
 
             template <typename T,
-                typename std::enable_if<
-                    std::is_integral<T>::value
-                >::type * = nullptr
+                typename std::enable_if<std::is_integral<T>::value>::type * = nullptr
             >
             T get(int idx) const {
                 return T(sqlite3_column_int64(cmd_->stmt_, idx));
             }
 
             template <typename T,
-                typename std::enable_if<
-                    std::is_floating_point<T>::value
-                >::type * = nullptr
+                typename std::enable_if<std::is_floating_point<T>::value>::type * = nullptr
             >
             T get(int idx) const {
                 return T(sqlite3_column_double(cmd_->stmt_, idx));
             }
 
             template <typename T,
-                typename std::enable_if<
-                    //std::is_pointer<T>::value && std::is_const<T>::value
-                    //&& std::is_same<std::remove_pointer<std::remove_const<T>>, char>::value
-                    std::is_same<T, const char *>::value
-                >::type * = nullptr
+                typename std::enable_if<std::is_same<T, const char *>::value>::type * = nullptr
             >
             T get(int idx) const {
                 return reinterpret_cast<const char *>(sqlite3_column_text(cmd_->stmt_, idx));
             }
 
             template <typename T,
-                typename std::enable_if<
-                    std::is_base_of<T, std::string>::value
-                >::type * = nullptr
+                typename std::enable_if<std::is_base_of<std::string, T>::value>::type * = nullptr
             >
             T get(int idx) const {
                 return reinterpret_cast<const char *>(sqlite3_column_text(cmd_->stmt_, idx));
             }
 
             template <typename T,
-                typename std::enable_if<
-                    //std::is_pointer<T>::value && std::is_const<T>::value
-                    //&& std::is_same<std::remove_pointer<std::remove_const<T>>, void>::value
-                    std::is_same<T, const void *>::value
-                >::type * = nullptr
+                typename std::enable_if<std::is_same<T, const void *>::value>::type * = nullptr
             >
             T get(int idx) const {
                 return sqlite3_column_blob(cmd_->stmt_, idx);
             }
 
-            template <typename T,
-                typename std::enable_if<
-                    std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value
-                >::type * = nullptr
-            >
+            template <typename T, typename std::enable_if<std::container_traits<T>::is_vector>::type * = nullptr>
             T get(int idx) const {
-                typedef typename T::value_type VT;
-
-                auto s = sqlite3_column_bytes(cmd_->stmt_, idx);
-                const VT * p = static_cast<const VT *> (sqlite3_column_blob(cmd_->stmt_, idx));
-                return T(p, p + s / sizeof (VT));
+                typedef typename T::value_type value_type;
+                auto range = std::make_range(static_cast<const value_type *>(sqlite3_column_blob(cmd_->stmt_, idx)),
+                    sqlite3_column_bytes(cmd_->stmt_, idx) / sizeof(value_type));
+                return T(range.begin(), range.end());
             }
 
-            template <typename T,
-                typename std::enable_if<std::is_array<T>::value>::type * = nullptr
-            >
+            template <typename T, typename std::enable_if<std::container_traits<T>::is_array>::type * = nullptr>
             T get(int idx) const {
-                typedef typename T::value_type VT;
-
-                auto s = sqlite3_column_bytes(cmd_->stmt_, idx);
-                const VT * p = static_cast<const VT *> (sqlite3_column_blob(cmd_->stmt_, idx));
-                return T(p, p + s / sizeof (VT));
+                typedef typename T::value_type value_type;
+                auto range = std::make_range(static_cast<const value_type *>(sqlite3_column_blob(cmd_->stmt_, idx)),
+                    sqlite3_column_bytes(cmd_->stmt_, idx) / sizeof(value_type));
+                T result({}); // by default array zero initialized
+                auto i = std::copy(range, std::begin(result), std::end(result));
+                std::fill(i, std::end(result), value_type(0));
+                return result;
             }
 
-            template <typename T,
-                typename std::enable_if<std::is_class<T>::value>::type * = nullptr
-            >
-            T get(int idx) const {
-                auto s = sqlite3_column_bytes(cmd_->stmt_, idx);
-                if( size_t(s) < sizeof(T) ) {
-                    if( cmd_->db().exceptions() )
-                        throw std::range_error("sqlite3_column_bytes < sizeof(T)");
-                    return T();
-                }
-                const T * p = static_cast<const T *> (sqlite3_column_blob(cmd_->stmt_, idx));
-                return T(*p);
-            }
-
-            template <typename T>
-            T get(const char * name) const {
+            template <typename T, std::size_t _Sz>
+            T get(const char (&name) [_Sz]) const {
                 return get<T>(cmd_->column_name2idx(name));
             }
 
@@ -959,8 +909,6 @@ namespace sqlite3pp {
             T get(const std::string & name) const {
                 return get<T>(cmd_->column_name2idx(name.c_str()));
             }
-
-            //using var_t = std::variant<int, long long int, double, std::string, std::vector<uint8_t>>;
         protected:
             query * cmd_;
         private:
@@ -1042,6 +990,16 @@ namespace sqlite3pp {
 
         char const* column_decltype(int idx) const {
             return sqlite3_column_decltype(stmt_, idx);
+        }
+
+        template <std::size_t _Sz>
+        int column_name2idx(const char (&name) [_Sz]) const {
+            auto i = column_cache_.find(name);
+
+            if( i == column_cache_.cend() )
+                throw database_error("Invalid column name");
+
+            return i->second;
         }
 
         int column_name2idx(const char * name) const {

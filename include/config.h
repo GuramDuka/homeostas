@@ -90,23 +90,61 @@
 #   define HAVE_ENDIAN_H 1
 #endif
 //------------------------------------------------------------------------------
+#if __cplusplus
+extern "C" {
+#endif
+//-----------------------------------------------------------------------------
 #if HAVE_ENDIAN_H
 #   include <endian.h>
-#else
-#   if __cplusplus
-extern "C" {
+#   ifdef htobe16
+#       define HAVE_HTOBE16 1
 #   endif
-//-----------------------------------------------------------------------------
-#   if _MSC_VER || __MINGW__ || defined(_X86_) || defined(__x86_64) || defined(_M_X64) || _M_IX86
-#       define LITTLE_ENDIAN 1
-#       define BIG_ENDIAN 2
-#       define BYTE_ORDER LITTLE_ENDIAN
+#   ifdef htobe32
+#       define HAVE_HTOBE32 1
 #   endif
+#   ifdef htobe64
+#       define HAVE_HTOBE64 1
+#   endif
+#   ifdef le16toh
+#       define HAVE_LE16TOH 1
+#   endif
+#   ifdef le32toh
+#       define HAVE_LE32TOH 1
+#   endif
+#   ifdef le64toh
+#       define HAVE_LE64TOH 1
+#   endif
+#   ifdef be16toh
+#       define HAVE_BE16TOH 1
+#   endif
+#   ifdef be32toh
+#       define HAVE_BE32TOH 1
+#   endif
+#   ifdef be64toh
+#       define HAVE_BE64TOH 1
+#   endif
+#   ifdef htole16
+#       define HAVE_HTOLE16 1
+#   endif
+#   ifdef htole32
+#       define HAVE_HTOLE32 1
+#   endif
+#   ifdef htole64
+#       define HAVE_HTOLE64 1
+#   endif
+//---------------------------------------------------------------------------
+#elif _WIN32
+#   if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
+#       define LITTLE_ENDIAN 1234
+#       define BIG_ENDIAN 4321
+#   endif
+#   define BYTE_ORDER LITTLE_ENDIAN
 #   include <inttypes.h>
 #   include <stdint.h>
 //-----------------------------------------------------------------------------
 static __inline__ uint16_t htobe16(uint16_t u)
 {
+#define HAVE_HTOBE16 1
 #if BYTE_ORDER == LITTLE_ENDIAN
   return (uint16_t) ((u >> 8) | ((u & 0xff) << 8));
 #else
@@ -116,6 +154,7 @@ static __inline__ uint16_t htobe16(uint16_t u)
 //---------------------------------------------------------------------------
 static __inline__ uint32_t htobe32(uint32_t u)
 {
+#define HAVE_HTOBE32 1
 #if BYTE_ORDER == LITTLE_ENDIAN
     u = (u << 16) ^ (u >> 16);
     return ((u & 0x00ff00ff) << 8) ^ ((u >> 8) & 0x00ff00ff);
@@ -126,6 +165,7 @@ static __inline__ uint32_t htobe32(uint32_t u)
 //---------------------------------------------------------------------------
 static __inline__ uint64_t htobe64(uint64_t u)
 {
+#define HAVE_HTOBE64 1
 #if BYTE_ORDER == LITTLE_ENDIAN
     u = (u << 32) | (u >> 32);
     u = ((u & 0x0000ffff0000ffffull) << 16) | ((u >> 16) & 0x0000ffff0000ffffull);
@@ -136,6 +176,7 @@ static __inline__ uint64_t htobe64(uint64_t u)
 //---------------------------------------------------------------------------
 static __inline__ uint16_t le16toh(uint16_t u)
 {
+#define HAVE_LE16TOH 1
 #if BYTE_ORDER == LITTLE_ENDIAN
   return u;
 #else
@@ -145,6 +186,7 @@ static __inline__ uint16_t le16toh(uint16_t u)
 //---------------------------------------------------------------------------
 static __inline__ uint32_t le32toh(uint32_t u)
 {
+#define HAVE_LE32TOH 1
 #if BYTE_ORDER == LITTLE_ENDIAN
     return u;
 #else
@@ -155,6 +197,7 @@ static __inline__ uint32_t le32toh(uint32_t u)
 //---------------------------------------------------------------------------
 static __inline__ uint64_t le64toh(uint64_t u)
 {
+#define HAVE_LE64TOH 1
 #if BYTE_ORDER == BIG_ENDIAN
     u = (u << 32) | (u >> 32);
     u = ((u & 0x0000ffff0000ffffull) << 16) | ((u >> 16) & 0x0000ffff0000ffffull);
@@ -165,6 +208,7 @@ static __inline__ uint64_t le64toh(uint64_t u)
 //---------------------------------------------------------------------------
 static __inline__ uint16_t be16toh(uint16_t u)
 {
+#define HAVE_BE16TOH 1
 #if BYTE_ORDER == LITTLE_ENDIAN
   return (uint16_t) ((u >> 8) | ((u & 0xff) << 8));
 #else
@@ -174,6 +218,7 @@ static __inline__ uint16_t be16toh(uint16_t u)
 //---------------------------------------------------------------------------
 static __inline__ uint32_t be32toh(uint32_t u)
 {
+#define HAVE_BE32TOH 1
 #if BYTE_ORDER == LITTLE_ENDIAN
     u = (u << 16) ^ (u >> 16);
     return ((u & 0x00ff00ff) << 8) ^ ((u >> 8) & 0x00ff00ff);
@@ -184,6 +229,7 @@ static __inline__ uint32_t be32toh(uint32_t u)
 //---------------------------------------------------------------------------
 static __inline__ uint64_t be64toh(uint64_t u)
 {
+#define HAVE_BE64TOH 1
 #if BYTE_ORDER == LITTLE_ENDIAN
     u = (u << 32) | (u >> 32);
     u = ((u & 0x0000ffff0000ffffull) << 16) | ((u >> 16) & 0x0000ffff0000ffffull);
@@ -194,6 +240,7 @@ static __inline__ uint64_t be64toh(uint64_t u)
 //---------------------------------------------------------------------------
 static __inline__ uint16_t htole16(uint16_t u)
 {
+#define HAVE_HTOLE16 1
 #if BYTE_ORDER == LITTLE_ENDIAN
   return u;
 #else
@@ -203,6 +250,7 @@ static __inline__ uint16_t htole16(uint16_t u)
 //---------------------------------------------------------------------------
 static __inline__ uint32_t htole32(uint32_t u)
 {
+#define HAVE_HTOLE32 1
 #if BYTE_ORDER == LITTLE_ENDIAN
     return u;
 #else
@@ -213,6 +261,7 @@ static __inline__ uint32_t htole32(uint32_t u)
 //---------------------------------------------------------------------------
 static __inline__ uint64_t htole64(uint64_t u)
 {
+#define HAVE_HTOLE64 1
 #if BYTE_ORDER == BIG_ENDIAN
     u = (u << 32) | (u >> 32);
     u = ((u & 0x0000ffff0000ffffull) << 16) | ((u >> 16) & 0x0000ffff0000ffffull);
@@ -220,6 +269,10 @@ static __inline__ uint64_t htole64(uint64_t u)
 #endif
     return u;
 }
+//---------------------------------------------------------------------------
+#endif
+//------------------------------------------------------------------------------
+#ifndef __BSD__
 //---------------------------------------------------------------------------
 static __inline__ void be16enc(void * pp, uint16_t u)
 {
@@ -376,12 +429,12 @@ static __inline__ uint64_t le64dec(const void *pp)
 #endif
 }
 //---------------------------------------------------------------------------
+#endif
+//---------------------------------------------------------------------------
 #if __cplusplus
 } // extern "C"
 #endif
 //-----------------------------------------------------------------------------
-#endif
-//------------------------------------------------------------------------------
 #if __cplusplus
 //------------------------------------------------------------------------------
 // On Android for armeabi-v7a GCC 4.9:  __cplusplus == 201300L
@@ -406,9 +459,11 @@ static __inline__ uint64_t le64dec(const void *pp)
 #   endif
 #endif
 //------------------------------------------------------------------------------
-namespace homeostas {
+namespace std {
 struct leave_uninitialized_type {};
 constexpr const leave_uninitialized_type leave_uninitialized = {};
+struct zero_initialized_type {};
+constexpr const zero_initialized_type zero_initialized = {};
 }
 //------------------------------------------------------------------------------
 namespace homeostas { namespace tests { void run_tests(); }}

@@ -28,10 +28,11 @@
 #endif
 #include <iterator>
 //------------------------------------------------------------------------------
-#include "locale_traits.hpp"
+#include "std_ext.hpp"
 #include "cdc512.hpp"
 #include "port.hpp"
 #include "configuration.hpp"
+#include "discoverer.hpp"
 #include "qobjects.hpp"
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
@@ -92,9 +93,9 @@ void Homeostas::startServer()
 
     server_ = std::make_unique<homeostas::server>();
     server_->host_public_key(
-        homeostas::configuration::instance()->get("host.public_key").to_digest());
+        homeostas::configuration::instance()->get("host.public_key").to_key512());
     server_->host_private_key(
-        homeostas::configuration::instance()->get("host.private_key").to_digest());
+        homeostas::configuration::instance()->get("host.private_key").to_key512());
     server_->startup();
 }
 //------------------------------------------------------------------------------
@@ -111,7 +112,10 @@ void Homeostas::startClient()
     if( client_ != nullptr )
         return;
 
+    at_scope_exit( homeostas::configuration::instance()->detach_db() );
+
     client_ = std::make_unique<homeostas::client>();
+    client_->server_public_key(homeostas::configuration::instance()->get("host.public_key"));
     client_->startup();
 }
 //------------------------------------------------------------------------------
@@ -129,24 +133,27 @@ void Homeostas::loadTrackers()
     auto config = homeostas::configuration::instance();
 
     if( !config->exists("host.private_key") ) {
-        const auto id = Homeostas::instance()->newUniqueId().toStdString();
-        config->set("host.private_key", std::stokey512(id));
+        auto key = std::stokey512(Homeostas::instance()->newUniqueId().toStdString());
+        config->set("host.private_key", key);
     }
 
     if( !config->exists("host.public_key") ) {
-        const auto id = Homeostas::instance()->newUniqueId().toStdString();
-        config->set("host.public_key", std::stokey512(id));
+        auto key = std::stokey512(Homeostas::instance()->newUniqueId().toStdString());
+        config->set("host.public_key", key);
+        at_scope_exit( homeostas::discoverer::instance()->detach_db() );
+        auto local_p2p_key = std::stokey512(Homeostas::instance()->newUniqueId().toStdString());
+        homeostas::discoverer::instance()->announce_host(key, nullptr, &local_p2p_key);
     }
 
     std::cerr << "private key: "
-        << std::to_string(config->get("host.private_key").to_digest()) << std::endl;
+        << config->get("host.private_key") << std::endl;
     std::cerr << "public key : "
-        << std::to_string(config->get("host.public_key").to_digest()) << std::endl;
+        << config->get("host.public_key") << std::endl;
 #if QT_CORE_LIB
     qDebug().noquote().nospace() << "private key: "
-        << QString::fromStdString(std::to_string(config->get("host.private_key").to_digest()));
+        << QString::fromStdString(config->get("host.private_key"));
     qDebug().noquote().nospace() << "public key : "
-        << QString::fromStdString(std::to_string(config->get("host.public_key").to_digest()));
+        << QString::fromStdString(config->get("host.public_key"));
 #endif
 
 #ifndef NDEBUG
@@ -169,7 +176,7 @@ void Homeostas::loadTrackers()
         const auto & path = tracker["path"];
 
         trackers_.emplace_back(std::make_shared<homeostas::directory_tracker>(
-            tracker.value().to_string(), path.value().to_string()));
+            tracker.value(), path.value()));
     }
 }
 //------------------------------------------------------------------------------

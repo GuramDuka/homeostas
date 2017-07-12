@@ -22,6 +22,7 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
+#include "thread_pool.hpp"
 #include "port.hpp"
 #include "cdc512.hpp"
 #include "tracker.hpp"
@@ -41,12 +42,12 @@ void directory_tracker::worker()
         if( db.connected() )
             return;
 
-        db.exceptions(false).connect(
+        db.connect(
             db_path_name_,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
         );
 
-        auto rc = sqlite3pp::command(db, R"EOS(
+        db.execute_all(R"EOS(
             PRAGMA page_size = 4096;
             PRAGMA journal_mode = WAL;
             PRAGMA count_changes = OFF;
@@ -54,12 +55,7 @@ void directory_tracker::worker()
             PRAGMA cache_size = -2048;
             PRAGMA synchronous = NORMAL;
             /*PRAGMA temp_store = MEMORY;*/
-        )EOS").execute_all();
-
-        if( rc != SQLITE_OK )
-            db.disconnect();
-
-        db.exceptions(true);
+        )EOS");
     };
 
     for(;;) {
@@ -83,7 +79,7 @@ void directory_tracker::worker()
 //------------------------------------------------------------------------------
 void directory_tracker::startup()
 {
-    if( thread_ != nullptr )
+    if( started_ )
         return;
 
     auto remove_forbidden_characters = [] (const auto & s) {
@@ -106,7 +102,7 @@ void directory_tracker::startup()
 
         cdc512 ctx(s.cbegin(), s.cend());
 
-        if( slen(t.c_str()) > 13 )
+        if( std::slen(t.c_str()) > 13 )
             t = t.substr(0, 13);
 
         t.push_back('-');
@@ -133,12 +129,13 @@ void directory_tracker::startup()
         mkdir(db_path_);
 
     shutdown_ = false;
-    thread_ = std::make_unique<std::thread>(&directory_tracker::worker, this);
+    worker_result_ = thread_pool_t::instance()->enqueue(&directory_tracker::worker, this);
+    started_ = true;
 }
 //------------------------------------------------------------------------------
 void directory_tracker::shutdown()
 {
-    if( thread_ == nullptr )
+    if( !started_ )
         return;
 
     std::unique_lock<std::mutex> lk(mtx_);
@@ -146,8 +143,8 @@ void directory_tracker::shutdown()
     lk.unlock();
     cv_.notify_one();
 
-    thread_->join();
-    thread_ = nullptr;
+    worker_result_.wait();
+    started_ = false;
 }
 //------------------------------------------------------------------------------
 } // namespace homeostas

@@ -27,7 +27,7 @@
 #   include <QDebug>
 #endif
 //------------------------------------------------------------------------------
-#include "scope_exit.hpp"
+#include "std_ext.hpp"
 #include "port.hpp"
 #include "socket.hpp"
 #include "server.hpp"
@@ -37,49 +37,44 @@ namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-void server::listener()
+void server::accepter(std::shared_ptr<passive_socket> socket)
 {
-    auto accepter = [this] (auto socket) {
-        auto w = std::bind(&server::worker, this, std::placeholders::_1);
+    auto w = std::bind(&server::worker, this, std::placeholders::_1);
 
-        for(;;) {
-            auto s = socket->accept_shared();
+    for(;;) {
+        auto s = socket->accept_shared();
 
-            if( shutdown_ || !s || s->invalid() || s->fail() || socket->interrupt() )
-                break;
+        if( shutdown_ || !s || s->invalid() || s->fail() || socket->interrupt() )
+            break;
 
-            thread_pool_t::instance()->enqueue(w, s);
-        }
-    };
+        auto result_future = thread_pool_t::instance()->enqueue(w, s);
 
-    auto addr_equ = [] (const auto & a, const auto & b) {
-        return a.addr_equ(b);
-    };
+        std::unique_lock<std::mutex> lock(mtx_);
+        workers_results_.push_back(result_future);
+    }
+}
+//------------------------------------------------------------------------------
+void server::control()
+{
+    discoverer d;
 
     auto port = [&] {
-        auto addrs = discoverer::instance()->discover_host_addresses(host_public_key_);
+        auto addrs = d.discover_host(host_public_key_);
 
         for( const auto & a : addrs )
             if( a.is_link_local() || a.is_loopback() )
                 return a.port();
 
-        return std::ihash<uint16_t>(clock_gettime_ns());
+        return std::ihash<uint16_t>(entropy_fast());
     }();
 
     std::vector<socket_addr> interfaces;
 
     auto recheck_interfaces = [&] {
-        std::vector<socket_addr> t;
-
-        for( const auto & a : basic_socket::interfaces<decltype(t)>() ) {
-            //if( a.is_link_local() || a.is_loopback() )
-            //    continue;
-            t.emplace_back(a);
-        }
-
+        auto t = basic_socket::interfaces();
         std::sort(t.begin(), t.end());
 
-        auto r = !std::equal(t.begin(), t.end(), interfaces.begin(), interfaces.end(), addr_equ)
+        auto r = !std::equal(t.begin(), t.end(), interfaces.begin(), interfaces.end(), socket_addr::addr_equ)
             && t.size() != interfaces.size();
 
         if( r )
@@ -102,7 +97,7 @@ void server::listener()
 
         std::unique_lock<std::mutex> lock(mtx_);
 
-        auto r = !std::equal(t.begin(), t.end(), public_addrs_.begin(), public_addrs_.end(), addr_equ)
+        auto r = !std::equal(t.begin(), t.end(), public_addrs_.begin(), public_addrs_.end(), socket_addr::addr_equ)
             && t.size() != public_addrs_.size();
 
         if( r )
@@ -111,40 +106,61 @@ void server::listener()
         return r;
     };
 
+    std::vector<std::shared_ptr<passive_socket>> sockets;
+    std::vector<std::shared_future<void>> accepters_results;
+
     auto reinitialize = [&] {
         auto nport = std::rhash(port);
 
-        std::unique_lock<std::mutex> lock(mtx_);
-
-        for( auto s : sockets_ )
+        for( auto s : sockets )
             s->interrupt(true).close();
+        for( auto a : accepters_results )
+            a.wait();
+        for( auto w : workers_results_ )
+            w.wait();
 
-        sockets_.clear();
+        std::unique_lock<std::mutex> lock(mtx_);
+        sockets.clear();
+        accepters_results.clear();
+        workers_results_.clear();
 
         for( size_t i = 0; i < interfaces.size(); i++ ) {
-            if( sockets_.size() <= i )
-                sockets_.emplace_back(std::make_shared<passive_socket>());
+            auto socket = std::make_shared<passive_socket>();
+            auto safe = socket->exceptions();
+            at_scope_exit( socket->exceptions(safe) );
+            socket->exceptions(false);
+            socket->listen(interfaces[i].port(port));
 
-            if( !sockets_[i]->listen(interfaces[i].port(port)) )
-                break;
+            if( socket )
+                sockets.emplace_back(socket);
         }
 
-        if( sockets_.size() != interfaces.size() )
-            sockets_.clear();
+        for( size_t i = 0; i < sockets.size(); i++ )
+            accepters_results.push_back(
+                thread_pool_t::instance()->enqueue(&server::accepter, this, sockets[i]));
 
-        for( size_t i = 0; i < sockets_.size(); i++ )
-            thread_pool_t::instance()->enqueue(accepter, sockets_[i]);
-
-        if( sockets_.size() == interfaces.size() && !interfaces.empty() )
+        if( !sockets.empty() )
             port_ = nport;
     };
 
     auto wait = [&] (const std::chrono::seconds & s) {
         std::unique_lock<std::mutex> lock(mtx_);
+
+        workers_results_.remove_if([&] (auto w) {
+            return w.wait_for(std::chrono::nanoseconds(0)) == std::future_status::ready;
+        });
+
         cv_.wait_for(lock, s, [&] { return shutdown_; });
     };
 
     at_scope_exit(
+        for( auto s : sockets )
+            s->interrupt(true).close();
+        for( auto a : accepters_results )
+            a.wait();
+        for( auto w : workers_results_ )
+            w.wait();
+        workers_results_.clear();
         announcer_ = nullptr;
         natpmp_ = nullptr;
     );
@@ -157,22 +173,22 @@ void server::listener()
                 if( port < 1024 )
                     port += 1024;
 
-                if( recheck_interfaces() || sockets_.empty() )
+                if( recheck_interfaces() || sockets.empty() )
                     reinitialize();
 
-                if( !sockets_.empty() )
+                if( !sockets.empty() )
                     break;
 
                 port++;
                 port_changed = true;
 
-                wait(std::chrono::seconds(interfaces.empty() ? 60 : 1));
+                wait(std::chrono::seconds(sockets.empty() ? 60 : 1));
             }
 
             if( shutdown_ )
                 break;
 
-            announcer::instance()->announce_host_addresses(host_public_key_, interfaces);
+            d.announce_host(host_public_key_, &interfaces);
 
             bool public_addrs_changed = recheck_public_addrs();
 
@@ -213,23 +229,21 @@ void server::listener()
                     announcer_->startup();
                 }
             }
-
-            wait(std::chrono::seconds(60));
         }
         catch( const std::exception & e ) {
             std::cerr << e << std::endl;
 #if QT_CORE_LIB
             qDebug().noquote().nospace() << QString::fromStdString(e.what());
 #endif
-            wait(std::chrono::seconds(3));
         }
         catch( ... ) {
             std::cerr << "undefined c++ exception catched" << std::endl;
 #if QT_CORE_LIB
             qDebug().noquote().nospace() << "undefined c++ exception catched";
 #endif
-            wait(std::chrono::seconds(3));
         }
+
+        wait(std::chrono::seconds(60));
     }
 }
 //------------------------------------------------------------------------------
@@ -245,13 +259,12 @@ void server::worker(std::shared_ptr<active_socket> socket)
         std::key512 * p_remote_transport_key) {
         assert( req != nullptr );
 
-        if( res == nullptr ) {
+        if( res != nullptr ) {
             // client request received
             discoverer d;
             peer_pubic_key = req->public_key;
-            peer_p2p_key = d.discover_p2p_key(peer_pubic_key);
-        }
-        else if( p_local_transport_key == nullptr && p_remote_transport_key == nullptr ) {
+            peer_p2p_key = d.discover_host_p2p_key(peer_pubic_key);
+
             // client fingerprint based on p2p key and server public key
             std::key512 fingerprint = cdc512(std::begin(peer_p2p_key), std::end(peer_p2p_key),
                 std::begin(host_public_key_), std::end(host_public_key_));
@@ -272,7 +285,8 @@ void server::worker(std::shared_ptr<active_socket> socket)
                 res->error = handshake::ErrorInvalidFingerprint;
             }
         }
-        else {
+
+        if( p_local_transport_key != nullptr && p_remote_transport_key != nullptr ) {
             // client approved my fingerprint
             *p_local_transport_key = cdc512(std::begin(peer_p2p_key), std::end(peer_p2p_key),
                 std::begin(res->session_key), std::end(res->session_key));
@@ -281,54 +295,71 @@ void server::worker(std::shared_ptr<active_socket> socket)
         }
     });
 
-    try {
-        std::string s;
-        ss >> s;
-        //cdc512 ctx(s.begin(), s.end());
-        //ss << ctx.to_short_string() << std::flush;
+    // set handshake parameters
+    ss.proto(handshake::ProtocolV1);
+    ss.encryption(handshake::EncryptionLight);
+    ss.encryption_option(handshake::OptionPrefer);
+    ss.compression(handshake::CompressionLZ4);
+    ss.compression_option(handshake::OptionPrefer);
 
-        //std::unique_lock<std::mutex> lock(mtx);
-        //std::qerr
-        //    << "accepted: "
-        //    << std::to_string(client_socket->local_addr())
-        //    << " -> "
-        //    << std::to_string(client_socket->remote_addr())
-        //    << std::endl;
-    }
-    catch( const std::ios_base::failure & e ) {
-        std::unique_lock<std::mutex> lock(mtx_);
-        std::cerr << e << std::endl;
-        throw;
+    while( !shutdown_ ) {
+        try {
+            std::string s;
+            ss >> s;
+            ss << "Ehlo" << std::flush;
+
+            //std::cerr
+            //    << "accepted: "
+            //    << std::to_string(client_socket->local_addr())
+            //    << " -> "
+            //    << std::to_string(client_socket->remote_addr())
+            //    << std::endl;
+        }
+        catch( const std::ios_base::failure & e ) {
+            std::cerr << e << std::endl;
+#if QT_CORE_LIB
+            qDebug().noquote().nospace() << QString::fromStdString(e.what());
+#endif
+        }
+        catch( const std::exception & e ) {
+            std::cerr << e << std::endl;
+#if QT_CORE_LIB
+            qDebug().noquote().nospace() << QString::fromStdString(e.what());
+#endif
+        }
+        catch( ... ) {
+            std::cerr << "undefined c++ exception catched" << std::endl;
+#if QT_CORE_LIB
+            qDebug().noquote().nospace() << "undefined c++ exception catched";
+#endif
+        }
     }
 }
 //------------------------------------------------------------------------------
 void server::startup()
 {
-    if( thread_ != nullptr )
+    if( started_ )
         return;
 
     shutdown_ = false;
-    thread_ = std::make_unique<std::thread>(&server::listener, this);
+    control_result_ = thread_pool_t::instance()->enqueue(&server::control, this);
+    started_ = true;
 }
 //------------------------------------------------------------------------------
 void server::shutdown()
 {
-    if( thread_ == nullptr )
+    if( !started_ )
         return;
 
     std::unique_lock<std::mutex> lock(mtx_);
     shutdown_ = true;
-    for( auto s : sockets_ )
-        s->interrupt(true).close();
     lock.unlock();
     cv_.notify_one();
 
-    thread_->join();
-
-    thread_ = nullptr;
+    control_result_.wait();
     natpmp_ = nullptr;
     announcer_ = nullptr;
-    sockets_.clear();
+    started_ = false;
 }
 //------------------------------------------------------------------------------
 } // namespace homeostas

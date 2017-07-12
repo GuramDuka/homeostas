@@ -47,7 +47,7 @@ void cdc512_test()
 		cdc512 ctx1;
 		ctx1.init();
 		ctx1.update(t, sizeof(t));
-		ctx1.finish();
+		ctx1.final();
 
         //std::qerr << (s = ctx1.to_string()) << std::endl;
 
@@ -56,7 +56,7 @@ void cdc512_test()
 		cdc512 ctx2;
 		ctx2.init();
 		ctx2.update(t, sizeof(t));
-		ctx2.finish();
+		ctx2.final();
 
         //std::qerr << (s = ctx2.to_string()) << std::endl;
 		

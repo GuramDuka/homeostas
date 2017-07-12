@@ -53,9 +53,7 @@ public:
         shutdown();
     }
 
-    bool started() const {
-        return thread_ != nullptr;
-    }
+    server() {}
 
     void startup();
     void shutdown();
@@ -79,14 +77,15 @@ public:
     }
 
 protected:
-    void listener();
+    void control();
+    void accepter(std::shared_ptr<passive_socket> socket);
     void worker(std::shared_ptr<active_socket> socket);
 
     std::unique_ptr<natpmp> natpmp_;
     std::unique_ptr<announcer> announcer_;
     std::vector<socket_addr> public_addrs_;
-    std::vector<std::shared_ptr<passive_socket>> sockets_;
-    std::unique_ptr<std::thread> thread_;
+    std::shared_future<void> control_result_;
+    std::list<std::shared_future<void>> workers_results_;
     std::mutex mtx_;
     std::condition_variable cv_;
 
@@ -94,7 +93,11 @@ protected:
     std::key512 host_public_key_;
     std::key512 host_private_key_;
 
+    bool started_  = false;
     bool shutdown_;
+private:
+    server(const server &) = delete;
+    void operator = (const server &) = delete;
 };
 //------------------------------------------------------------------------------
 namespace tests {

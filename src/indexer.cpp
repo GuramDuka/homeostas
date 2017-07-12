@@ -32,8 +32,7 @@
 #endif
 //------------------------------------------------------------------------------
 #include "port.hpp"
-#include "scope_exit.hpp"
-#include "locale_traits.hpp"
+#include "std_ext.hpp"
 #include "cdc512.hpp"
 #include "indexer.hpp"
 //------------------------------------------------------------------------------
@@ -48,7 +47,7 @@ static inline auto unpack_FILETIME(FILETIME & ft, uint32_t & nsec)
     q.LowPart = ft.dwLowDateTime;
     q.HighPart = ft.dwHighDateTime;
     nsec = uint32_t((q.QuadPart % 10000000) * 100); // FILETIME is in units of 100 nsec.
-    constexpr const uint64_t secs_between_epochs = 11644473600; // Seconds between 1.1.1601 and 1.1.1970 */
+    constexpr const uint64_t secs_between_epochs = 11644473600; // Seconds between 1.1.1601 and 1.1.1970
     return time_t((q.QuadPart / 10000000) - secs_between_epochs);
 };
 #endif
@@ -439,10 +438,10 @@ void directory_indexer::reindex(
     db.exceptions(true);
 
     db.execute_all(R"EOS(
-        CREATE TABLE IF NOT EXISTS rowids (
+        /*CREATE TABLE IF NOT EXISTS rowids (
             id              INTEGER PRIMARY KEY ON CONFLICT REPLACE,
             counter    		INTEGER NOT NULL
-        ) WITHOUT ROWID;
+        ) WITHOUT ROWID;*/
 
         CREATE TABLE IF NOT EXISTS entries (
             id              INTEGER PRIMARY KEY ON CONFLICT ABORT,
@@ -457,12 +456,12 @@ void directory_indexer::reindex(
             UNIQUE(parent_id, name) ON CONFLICT ABORT
         ) WITHOUT ROWID;
 
-        CREATE TRIGGER IF NOT EXISTS entries_after_insert_trigger
+        /*CREATE TRIGGER IF NOT EXISTS entries_after_insert_trigger
             AFTER INSERT
             ON entries
         BEGIN
             REPLACE INTO rowids(id, counter) VALUES (1, new.id);
-        END;
+        END;*/
 
         CREATE TRIGGER IF NOT EXISTS entries_after_delete_trigger
             AFTER DELETE
@@ -484,22 +483,33 @@ void directory_indexer::reindex(
         CREATE UNIQUE INDEX IF NOT EXISTS i3 ON blocks_digests (entry_id, block_no);
     )EOS");
 
-    uint64_t row_next_id = [&] {
-        sqlite3pp::query st(db, R"EOS(
-            SELECT
-                counter
-            FROM
-                rowids
-            WHERE
-                id = :id
-        )EOS");
+    sqlite3pp::query row_next_id_st(db, R"EOS(
+        SELECT
+            id
+        FROM
+            entries
+        WHERE
+            id = :id
+    )EOS");
 
-        st.bind("id", 1);
+    uint64_t row_id = entropy_fast();
 
-        auto i = st.begin();
+    auto row_next_id = [&] {
+        at_scope_exit( row_next_id_st.reset() );
 
-        return std::rhash(i ? i->get<uint64_t>(0) : 0) + 1;
-    }();
+        for(;;) {
+            row_next_id_st.bind("id", row_id);
+            auto i = row_next_id_st.begin();
+
+            if( i ) {
+                row_id = std::ihash<uint64_t>(std::rhash(row_id));
+            }
+            else
+                break;
+        }
+
+        return row_id;
+    };
 
     sqlite3pp::query st_sel(db, R"EOS(
         SELECT
@@ -688,13 +698,12 @@ void directory_indexer::reindex(
         }
         else {
             if( id == 0 ) {
-                auto next_id = std::rhash(row_next_id);
+                auto next_id = row_next_id();
                 st_ins.bind("id", next_id);
                 bind(st_ins);
                 st_ins.execute();
                 //if( st_ins.execute(SQLITE_CONSTRAINT_UNIQUE) != SQLITE_CONSTRAINT_UNIQUE )
                 id = next_id;
-                row_next_id++;
             }
             else {
                 bind(st_upd);
@@ -780,7 +789,7 @@ void directory_indexer::reindex(
             st_blk_sel.bind("entry_id", entry_id);
             st_blk_sel.bind("block_no", blk_no);
             auto i = st_blk_sel.begin();
-            cdc512 blk_ctx(leave_uninitialized);
+            cdc512 blk_ctx(std::leave_uninitialized);
 
             if( i ) {
                 bmtim = i->get<uint64_t>("mtime");
@@ -813,7 +822,7 @@ void directory_indexer::reindex(
                 //    std::memset(&buf[r], 0, block_size - r);
 
                 blk_ctx.update(std::begin(buf), std::begin(buf) + r);
-                blk_ctx.finish();
+                blk_ctx.final();
 
                 update_block_digest(entry_id, blk_no, mtim, blk_ctx);
             }
@@ -886,7 +895,7 @@ void directory_indexer::reindex(
                 cdc512 ctx;
 
                 if( update_blocks(ctx, dr.path_name_, entry_id, fmtim, block_size) ) {
-                    ctx.finish();
+                    ctx.final();
                     st_upd_after.bind("digest", ctx, sqlite3pp::nocopy);
                 }
             }

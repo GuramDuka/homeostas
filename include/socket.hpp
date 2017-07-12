@@ -76,9 +76,7 @@
 #include <functional>
 //------------------------------------------------------------------------------
 #include "port.hpp"
-#include "locale_traits.hpp"
 #include "std_ext.hpp"
-#include "scope_exit.hpp"
 #include "cdc512.hpp"
 #include "rand.hpp"
 //------------------------------------------------------------------------------
@@ -291,11 +289,19 @@ struct socket_addr {
                 : memcmp(addr_data(), s.addr_data(), addr_size());
     }
 
-    bool addr_equ(const socket_addr & s) const {
+    static bool addr_equ(const socket_addr & s1, const socket_addr & s2) {
+        return s1.addr_size() == s2.addr_size() && memcmp(s1.addr_data(), s2.addr_data(), s1.addr_size()) == 0;
+    }
+
+    bool equ(const socket_addr & s) const {
         return addr_size() == s.addr_size() && memcmp(addr_data(), s.addr_data(), addr_size()) == 0;
     }
 
-    bool addr_neq(const socket_addr & s) const {
+    static bool addr_neq(const socket_addr & s1, const socket_addr & s2) {
+        return s1.addr_size() != s2.addr_size() || memcmp(s1.addr_data(), s2.addr_data(), s1.addr_size()) != 0;
+    }
+
+    bool neq(const socket_addr & s) const {
         return addr_size() != s.addr_size() || memcmp(addr_data(), s.addr_data(), addr_size()) != 0;
     }
 
@@ -604,7 +610,7 @@ inline std::string to_string(const homeostas::socket_addr & a, bool no_throw = f
         throw std::xruntime_error(e, __FILE__, __LINE__);
     }
 
-    if( a.port() != 0 && homeostas::slen(sbuf) != 0 )
+    if( a.port() != 0 && std::slen(sbuf) != 0 )
         return std::string(hbuf) + ":" + std::string(sbuf);
 
     return std::string(hbuf);
@@ -937,7 +943,7 @@ public:
     }
 
     template <typename T,
-        typename std::enable_if<std::is_array<T>::value>::type * = nullptr
+        typename std::enable_if<std::container_traits<T>::is_array>::type * = nullptr
     >
     T recv(size_t size = 0) {
         T buffer;
@@ -947,8 +953,7 @@ public:
 
     template <typename T,
         typename std::enable_if<
-            std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value ||
-            std::is_base_of<T, std::basic_string<typename T::value_type, typename T::traits_type, typename T::allocator_type>>::value
+            std::container_traits<T>::is_string_or_vector
         >::type * = nullptr
     >
     T recv(size_t size = ~size_t(0), size_t max_recv = RX_MAX_BYTES) {
@@ -1029,16 +1034,14 @@ public:
 	}
 
     size_t send(const char * s, size_t max_send = TX_MAX_BYTES) {
-        return send(s, slen(s), max_send);
+        return send(s, std::slen(s), max_send);
     }
 
     template <typename T,
-        typename std::enable_if<
-            std::is_base_of<T, std::basic_string<typename T::value_type, typename T::traits_type, typename T::allocator_type>>::value
-        >::type * = nullptr
+        typename std::enable_if<std::container_traits<T>::is_array_or_vector_or_string>::type * = nullptr
     >
     size_t send(const T & s, size_t max_send = TX_MAX_BYTES) {
-        return send((const void *) s.c_str(), s.size() * sizeof(T::value_type), max_send);
+        return send(s.data(), s.size() * sizeof(T::value_type), max_send);
     }
 
     size_t send(const struct iovec * vec, size_t n) {
@@ -1280,7 +1283,7 @@ public:
 		return bRetVal;
 	}
 
-    const auto & exceptions() const {
+    bool exceptions() const {
         return exceptions_;
     }
 
@@ -1376,8 +1379,8 @@ public:
 
     template <typename T,
         typename std::enable_if<
-            std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
-            std::is_base_of<typename T::value_type, socket_addr>::value
+            std::is_base_of<std::vector<typename T::value_type, typename T::allocator_type>, T>::value &&
+            std::is_base_of<socket_addr, typename T::value_type>::value
         >::type * = nullptr
     >
     static T wildcards() {
@@ -1430,8 +1433,8 @@ public:
 
     template <typename T,
         typename std::enable_if<
-            std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
-            std::is_base_of<typename T::value_type, std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>>::value
+            std::is_base_of<std::vector<typename T::value_type, typename T::allocator_type>, T>::value &&
+            std::is_base_of<std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>, typename T::value_type>::value
         >::type * = nullptr
     >
     static T wildcards() {
@@ -1449,7 +1452,7 @@ public:
 
     template <typename T,
         typename std::enable_if<
-            std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
+            std::is_base_of<std::vector<typename T::value_type, typename T::allocator_type>, T>::value &&
             std::is_base_of<typename T::value_type, socket_addr>::value
         >::type * = nullptr
     >
@@ -1463,8 +1466,8 @@ public:
         if( gethostname(node, sizeof(domain)) == 0
             && getdomainname(domain, sizeof(domain)) == 0 ) {
 
-            if( slen(domain) != 0 && strcmp(domain, "(none)") != 0 )
-                scat(scat(node, "."), domain);
+            if( std::slen(domain) != 0 && std::scmp(domain, "(none)") != 0 )
+                std::scat(std::scat(node, "."), domain);
 
             addrinfo hints, * result = nullptr, * rp = nullptr;
 
@@ -1503,7 +1506,7 @@ public:
             for( rp = result; rp != nullptr; rp = rp->ai_next )
                 container.push_back(socket_addr(*rp));
 #if QT_CORE_LIB
-            if( container.empty() || (container.size() == 1 && container[0].is_loopback()) ) {
+            {
                 socket_addr a;
 
                 for( const auto & iface : QNetworkInterface::allInterfaces() )
@@ -1519,8 +1522,8 @@ public:
                             memcpy(&a.saddr6.sin6_addr, &a6, std::min(sizeof(a.saddr6.sin6_addr), sizeof(Q_IPV6ADDR)));
                         }
 
-                        if( a.family() != AF_UNSPEC && !a.is_loopback() )
-                            container.push_back(a);
+                        if( a.family() != AF_UNSPEC )
+                            container.push_back(a.port(0));
                     }
             }
 #endif
@@ -1535,8 +1538,8 @@ public:
 
     template <typename T,
         typename std::enable_if<
-            std::is_base_of<T, std::vector<typename T::value_type, typename T::allocator_type>>::value &&
-            std::is_base_of<typename T::value_type, std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>>::value
+            std::is_base_of<std::vector<typename T::value_type, typename T::allocator_type>, T>::value &&
+            std::is_base_of<std::basic_string<typename T::value_type::value_type, typename T::value_type::traits_type, typename T::value_type::allocator_type>, typename T::value_type>::value
         >::type * = nullptr
     >
     static T interfaces() {
@@ -2082,7 +2085,7 @@ public:
         // If no IP Address (interface ethn) is supplied, or the loop back is
         // specified then bind to any interface, else bind to specified interface.
         //--------------------------------------------------------------------------
-        if( pInterface == nullptr || slen(pInterface) == 0 ) {
+        if( pInterface == nullptr || std::slen(pInterface) == 0 ) {
             multicast_group_.sin_addr.s_addr = htonl(INADDR_ANY);
         }
         else if( (inAddr = ::inet_addr(pInterface)) != INADDR_NONE ) {

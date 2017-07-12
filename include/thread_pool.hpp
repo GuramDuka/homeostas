@@ -88,7 +88,7 @@ public:
         idle_threads_(0),
         idle_timeout_(idle_timeout)
     {
-        static_assert(std::is_base_of<T, std::thread>::value, "Must be derived from std::thread");
+        static_assert(std::is_base_of<std::thread, T>::value, "Must be derived from std::thread");
 
         if( min_threads_ == 0 )
             min_threads_ = std::thread::hardware_concurrency();
@@ -137,12 +137,12 @@ public:
     // add new work item to the pool
     template <class F, class... Args>
     auto enqueue(F&& f, Args&&... args)
-        -> std::future<typename std::result_of<F(Args...)>::type>
+        -> std::shared_future<typename std::result_of<F(Args...)>::type>
     {
         using return_type = typename std::result_of<F(Args...)>::type;
         auto task = std::make_shared<std::packaged_task<return_type()> >(
             std::bind(std::forward<F>(f), std::forward<Args>(args)...));
-        std::future<return_type> res = task->get_future();
+        std::shared_future<return_type> res(task->get_future());
 
         enqueuef([task] { (*task)(); });
 

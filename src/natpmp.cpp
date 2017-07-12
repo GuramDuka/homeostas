@@ -27,6 +27,7 @@
 #   include <QDebug>
 #endif
 //------------------------------------------------------------------------------
+#include "thread_pool.hpp"
 #include "natpmp.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
@@ -35,17 +36,17 @@ namespace homeostas {
 //------------------------------------------------------------------------------
 void natpmp::startup()
 {
-    if( thread_ != nullptr )
+    if( socket_ != nullptr )
         return;
 
     shutdown_ = false;
     socket_ = std::make_unique<active_socket>();
-    thread_ = std::make_unique<std::thread>(&natpmp::worker, this);
+    worker_result_ = thread_pool_t::instance()->enqueue(&natpmp::worker, this);
 }
 //------------------------------------------------------------------------------
 void natpmp::shutdown()
 {
-    if( thread_ == nullptr )
+    if( socket_ == nullptr )
         return;
 
     std::unique_lock<std::mutex> lk(mtx_);
@@ -54,8 +55,7 @@ void natpmp::shutdown()
     lk.unlock();
     cv_.notify_one();
 
-    thread_->join();
-    thread_ = nullptr;
+    worker_result_.wait();
     socket_ = nullptr;
 }
 //------------------------------------------------------------------------------
@@ -78,7 +78,7 @@ void natpmp::worker()
             socket_->recv(&resp, sizeof(resp));
             new_public_addr.family(AF_INET).port(0);
 
-            if( resp.result_code == ResultCodeSuccess && gateway_.addr_equ(socket_->peer_addr()) )
+            if( resp.result_code == ResultCodeSuccess && gateway_.equ(socket_->peer_addr()) )
                 memcpy(
                     new_public_addr.addr_data(),
                     &resp.addr,
@@ -167,8 +167,9 @@ void natpmp::worker()
     gate.family(AF_INET);
 
     while( !shutdown_ ) {
+        bool mapped = false, exception = false;
+
         try {
-            bool mapped = false;
 
             socket_->open(gate.family(), SocketTypeUDP, SocketProtoIP);
 
@@ -206,10 +207,6 @@ void natpmp::worker()
             }
 
             socket_->close();
-
-            std::unique_lock<std::mutex> lock(mtx_);
-            auto timeout_s = std::chrono::seconds(mapped ? port_mapping_lifetime_ : 60);
-            cv_.wait_for(lock, timeout_s, [&] { return shutdown_; });
         }
         catch( const std::exception & e ) {
             std::cerr << e << std::endl;
@@ -217,7 +214,7 @@ void natpmp::worker()
             qDebug().noquote().nospace() << QString::fromStdString(e.what());
 #endif
             public_addr_.clear();
-            wait(std::chrono::seconds(3));
+            exception = true;
         }
         catch( ... ) {
             std::cerr << "undefined c++ exception catched" << std::endl;
@@ -225,8 +222,12 @@ void natpmp::worker()
             qDebug().noquote().nospace() << "undefined c++ exception catched";
 #endif
             public_addr_.clear();
-            wait(std::chrono::seconds(3));
+            exception = true;
         }
+
+        std::unique_lock<std::mutex> lock(mtx_);
+        auto timeout_s = std::chrono::seconds(mapped ? port_mapping_lifetime_ : exception ? 3 : 60);
+        cv_.wait_for(lock, timeout_s, [&] { return shutdown_; });
     }
 }
 //------------------------------------------------------------------------------

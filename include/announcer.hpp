@@ -49,38 +49,15 @@ public:
         shutdown();
     }
 
+    announcer() {}
+
     static auto instance() {
         static announcer singleton;
         return &singleton;
     }
 
-    bool started() const {
-        return thread_ != nullptr;
-    }
-
-    void startup() {
-        if( thread_ != nullptr )
-            return;
-
-        shutdown_ = false;
-        socket_ = std::make_unique<active_socket>();
-        thread_ = std::make_unique<std::thread>(&announcer::worker, this);
-    }
-
-    void shutdown() {
-        if( thread_ == nullptr )
-            return;
-
-        std::unique_lock<std::mutex> lk(mtx_);
-        shutdown_ = true;
-        socket_->close();
-        lk.unlock();
-        cv_.notify_one();
-
-        thread_->join();
-        thread_ = nullptr;
-        socket_ = nullptr;
-    }
+    void startup();
+    void shutdown();
 
     auto & pubs(const std::vector<socket_addr> & pubs) {
         pubs_ = pubs;
@@ -90,21 +67,19 @@ public:
     const auto & pubs() const {
         return pubs_;
     }
-
-    void announce_host_addresses(const std::key512 & /*id*/, const std::vector<socket_addr> & /*addrs*/) {
-
-    }
-
 protected:
     void worker();
 
     std::vector<socket_addr> pubs_;
     std::unique_ptr<active_socket> socket_;
-    std::unique_ptr<std::thread> thread_;
+    std::shared_future<void> worker_result_;
     std::mutex mtx_;
     std::condition_variable cv_;
 
-    bool shutdown_;
+    bool shutdown_ = false;
+private:
+    announcer(const announcer &) = delete;
+    void operator = (const announcer &) = delete;
 };
 //------------------------------------------------------------------------------
 namespace tests {

@@ -51,9 +51,7 @@ public:
         shutdown();
     }
 
-    bool started() const {
-        return thread_ != nullptr;
-    }
+    natpmp() {}
 
     void startup();
     void shutdown();
@@ -175,7 +173,7 @@ protected:
     socket_addr public_addr_;
 
 	std::unique_ptr<active_socket> socket_;
-    std::unique_ptr<std::thread> thread_;
+    std::shared_future<void> worker_result_;
     std::mutex mtx_;
     std::condition_variable cv_;
 
@@ -184,6 +182,9 @@ protected:
     uint16_t private_port_          = 0;
 
     bool shutdown_;
+private:
+    natpmp(const natpmp &) = delete;
+    void operator = (const natpmp &) = delete;
 };
 //------------------------------------------------------------------------------
 namespace tests {

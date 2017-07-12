@@ -70,56 +70,35 @@ void discoverer::connect_db()
             CREATE INDEX IF NOT EXISTS i2 ON known_peers (expire);
         )EOS");
 
-        st_sel_ = std::make_unique<sqlite3pp::query>(*db_, R"EOS(
+        st_sel_peer_ = std::make_unique<sqlite3pp::query>(*db_, R"EOS(
             SELECT
-                id                                                      AS id,
-                name                                                    AS name,
-                value_type                                              AS value_type,
-                COALESCE(value_b, value_i, value_n, value_s, value_l)   AS value
+                p2p_key,
+                addrs,
+                mtime,
+                expire
             FROM
-                config
+                known_peers
             WHERE
-                parent_id = :parent_id
-                AND name = :name
+                public_key = :public_key
         )EOS");
 
-        st_sel_by_pid_ = std::make_unique<sqlite3pp::query>(*db_, R"EOS(
-            SELECT
-                id                                                      AS id,
-                name                                                    AS name,
-                value_type                                              AS value_type,
-                COALESCE(value_b, value_i, value_n, value_s, value_l)   AS value
-            FROM
-                config
-            WHERE
-                parent_id = :parent_id
-        )EOS");
-
-        st_ins_ = std::make_unique<sqlite3pp::command>(*db_, R"EOS(
-            INSERT INTO config
-                (id, parent_id, name, value_type, value_b, value_i, value_n, value_s, value_l)
+        st_ins_peer_ = std::make_unique<sqlite3pp::command>(*db_, R"EOS(
+            INSERT INTO known_peers
+                (public_key, p2p_key, addrs, mtime, expire)
                 VALUES
-                (:id, :parent_id, :name, :value_type, :value_b, :value_i, :value_n, :value_s, :value_l)
+                (:public_key, :p2p_key, :addrs, :mtime, :expire)
         )EOS");
 
-        st_upd_ = std::make_unique<sqlite3pp::command>(*db_, R"EOS(
-            UPDATE config SET
-                name        = :name,
-                value_type  = :value_type,
-                value_b     = :value_b,
-                value_i     = :value_i,
-                value_n     = :value_n,
-                value_s     = :value_s,
-                value_l     = :value_l
+        st_upd_peer_ = std::make_unique<sqlite3pp::command>(*db_, R"EOS(
+            UPDATE known_peers SET
+                p2p_key = :p2p_key,
+                addrs   = :addrs,
+                mtime   = :mtime,
+                expire  = :expire
             WHERE
-                parent_id = :parent_id
-                AND name = :name
+                public_key = :public_key
         )EOS");
     }
-}
-//------------------------------------------------------------------------------
-void discoverer::listener()
-{
 }
 //------------------------------------------------------------------------------
 void discoverer::worker(std::shared_ptr<active_socket> socket)
@@ -141,7 +120,7 @@ void discoverer::worker(std::shared_ptr<active_socket> socket)
         //    << std::endl;
     }
     catch( const std::ios_base::failure & e ) {
-        std::unique_lock<std::mutex> lock(*mtx_);
+        std::unique_lock<std::mutex> lock(mtx_);
         std::cerr << e << std::endl;
         throw;
     }
@@ -149,29 +128,103 @@ void discoverer::worker(std::shared_ptr<active_socket> socket)
 //------------------------------------------------------------------------------
 void discoverer::startup()
 {
-    if( thread_ != nullptr )
+    if( socket_ != nullptr )
         return;
 
     shutdown_ = false;
-    mtx_ = std::make_unique<std::mutex>();
-    cv_ = std::make_unique<std::condition_variable>();
-    thread_ = std::make_unique<std::thread>(&discoverer::listener, this);
+    socket_   = std::make_unique<active_socket>();
 }
 //------------------------------------------------------------------------------
 void discoverer::shutdown()
 {
-    if( thread_ == nullptr )
+    if( socket_ == nullptr )
         return;
 
-    std::unique_lock<std::mutex> lock(*mtx_);
+    std::unique_lock<std::mutex> lock(mtx_);
     shutdown_ = true;
+    socket_->close();
     lock.unlock();
-    cv_->notify_one();
+    cv_.notify_one();
 
-    thread_->join();
-    thread_ = nullptr;
-    cv_ = nullptr;
-    mtx_ = nullptr;
+    worker_result_.wait();
+    socket_ = nullptr;
+}
+//------------------------------------------------------------------------------
+discoverer & discoverer::announce_host(
+    const std::key512 & public_key,
+    const std::vector<socket_addr> * p_addrs,
+    const std::key512 * p_p2p_key)
+{
+    connect_db();
+
+    st_sel_peer_->bind("public_key", public_key, sqlite3pp::nocopy);
+#if QT_CORE_LIB
+//    qDebug().noquote().nospace() << "announce_host: " <<
+//        QString::fromStdString(std::to_string(std::blob(std::begin(public_key), std::end(public_key))));
+#endif
+
+    auto bind = [&] (auto & st) {
+        st->bind("public_key", public_key, sqlite3pp::nocopy);
+        st->bind("addrs", *p_addrs, sqlite3pp::nocopy);
+        st->bind("p2p_key", *p_p2p_key, sqlite3pp::nocopy);
+
+        auto ns = clock_gettime_ns();
+        st->bind("mtime", ns);
+        st->bind("expire", ns + std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::seconds(60)).count());
+
+        st->execute();
+    };
+
+    at_scope_exit( st_sel_peer_->reset() );
+    auto i = st_sel_peer_->begin();
+
+    if( i ) {
+        st_sel_peer_->reset();
+        bind(st_upd_peer_);
+    }
+    else {
+        bind(st_ins_peer_);
+    }
+
+    return *this;
+}
+//------------------------------------------------------------------------------
+std::vector<socket_addr> discoverer::discover_host(const std::key512 & public_key, std::key512 * p_p2p_key)
+{
+    std::vector<socket_addr> t;
+
+    connect_db();
+    st_sel_peer_->bind("public_key", public_key, sqlite3pp::nocopy);
+#if QT_CORE_LIB
+//    qDebug().noquote().nospace() << "discover_host: " <<
+//        QString::fromStdString(std::to_string(std::blob(std::begin(public_key), std::end(public_key))));
+#endif
+
+    at_scope_exit( st_sel_peer_->reset() );
+    auto i = st_sel_peer_->begin();
+
+    if( i ) {
+        t = i->get<decltype(t)>("addrs");
+
+        if( p_p2p_key != nullptr )
+            *p_p2p_key = i->get<std::key512>("p2p_key");
+    }
+
+    return t;
+}
+//------------------------------------------------------------------------------
+std::key512 discoverer::discover_host_p2p_key(const std::key512 & public_key)
+{
+    connect_db();
+    st_sel_peer_->bind("public_key", public_key, sqlite3pp::nocopy);
+
+    at_scope_exit( st_sel_peer_->reset() );
+    auto i = st_sel_peer_->begin();
+
+    if( i )
+        return i->get<std::key512>("p2p_key");
+
+    return std::key512(std::zero_initialized);
 }
 //------------------------------------------------------------------------------
 } // namespace homeostas

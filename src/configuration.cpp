@@ -23,7 +23,6 @@
  */
 //------------------------------------------------------------------------------
 #include "port.hpp"
-#include "locale_traits.hpp"
 #include "configuration.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
@@ -36,10 +35,6 @@ configuration::~configuration()
 //------------------------------------------------------------------------------
 configuration::configuration()
 {
-    assert( this == instance() );
-
-    if( this != instance() )
-        abort();
 }
 //------------------------------------------------------------------------------
 void configuration::connect_db()
@@ -67,10 +62,10 @@ void configuration::connect_db()
         )EOS");
 
         db_->execute_all(R"EOS(
-            CREATE TABLE IF NOT EXISTS rowids (
+            /*CREATE TABLE IF NOT EXISTS rowids (
                 id              INTEGER PRIMARY KEY ON CONFLICT REPLACE,
                 counter    		INTEGER NOT NULL
-            ) WITHOUT ROWID;
+            ) WITHOUT ROWID;*/
 
             CREATE TABLE IF NOT EXISTS config (
                 id              INTEGER PRIMARY KEY ON CONFLICT ABORT,
@@ -85,12 +80,12 @@ void configuration::connect_db()
                 UNIQUE(parent_id, name) ON CONFLICT ABORT
             ) WITHOUT ROWID;
 
-            CREATE TRIGGER IF NOT EXISTS config_after_insert_trigger
+            /*CREATE TRIGGER IF NOT EXISTS config_after_insert_trigger
                 AFTER INSERT
                 ON config
             BEGIN
                 REPLACE INTO rowids(id, counter) VALUES (1, new.id);
-            END;
+            END;*/
 
             CREATE UNIQUE INDEX IF NOT EXISTS i1 ON config (parent_id, name);
         )EOS");
@@ -141,22 +136,33 @@ void configuration::connect_db()
                 AND name = :name
         )EOS");
 
+        st_row_next_id_ = std::make_unique<sqlite3pp::query>(*db_, R"EOS(
+            SELECT
+                id
+            FROM
+                config
+            WHERE
+                id = :id
+        )EOS");
+
+        row_id_ = entropy_fast();
+
         row_next_id_ = [&] {
-            sqlite3pp::query st(*db_, R"EOS(
-                SELECT
-                    counter
-                FROM
-                    rowids
-                WHERE
-                    id = :id
-            )EOS");
+            at_scope_exit( st_row_next_id_->reset() );
 
-            st.bind("id", 1);
+            for(;;) {
+                st_row_next_id_->bind("id", row_id_);
+                auto i = st_row_next_id_->begin();
 
-            auto i = st.begin();
+                if( i ) {
+                    row_id_ = std::ihash<uint64_t>(std::rhash(row_id_));
+                }
+                else
+                    break;
+            }
 
-            return std::rhash(i ? i->get<uint64_t>(0) : 0) + 1;
-        }();
+            return row_id_;
+        };
     }
 }
 //------------------------------------------------------------------------------
@@ -167,6 +173,7 @@ std::variant configuration::get(uint64_t pid, const char * var_name, const std::
     st_sel_->bind("parent_id", pid);
     st_sel_->bind("name", var_name, sqlite3pp::nocopy);
 
+    at_scope_exit( st_sel_->reset() );
     auto i = st_sel_->begin();
 
     if( i ) {
@@ -216,13 +223,14 @@ uint64_t configuration::get_pid(const char * var_name, const char ** p_name, boo
         st_sel_->bind("parent_id", pid);
         st_sel_->bind("name", (const char *) n, sqlite3pp::nocopy);
 
+        at_scope_exit( st_sel_->reset() );
         auto i = st_sel_->begin();
 
         if( i ) {
             pid = i->get<uint64_t>("id");
         }
         else if( create_if_not_exists ) {
-            uint64_t id = std::rhash(row_next_id_);
+            uint64_t id = row_next_id_();
 
             st_ins_->bind("id"        , id);
             st_ins_->bind("parent_id" , pid);
@@ -236,7 +244,6 @@ uint64_t configuration::get_pid(const char * var_name, const char ** p_name, boo
             st_ins_->execute();
 
             pid = id;
-            row_next_id_++;
         }
         else {
             *p_pid_valid = false;
@@ -334,6 +341,7 @@ bool configuration::exists(const char * var_name)
     st_sel_->bind("parent_id", pid);
     st_sel_->bind("name"     , p, sqlite3pp::nocopy);
 
+    at_scope_exit( st_sel_->reset() );
     return st_sel_->begin();
 }
 //------------------------------------------------------------------------------

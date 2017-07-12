@@ -118,5 +118,30 @@ void announcer::worker()
     }
 }
 //------------------------------------------------------------------------------
+void announcer::startup()
+{
+    if( socket_ != nullptr )
+        return;
+
+    shutdown_ = false;
+    socket_ = std::make_unique<active_socket>();
+    worker_result_ = thread_pool_t::instance()->enqueue(&announcer::worker, this);
+}
+//------------------------------------------------------------------------------
+void announcer::shutdown()
+{
+    if( socket_ == nullptr )
+        return;
+
+    std::unique_lock<std::mutex> lk(mtx_);
+    shutdown_ = true;
+    socket_->close();
+    lk.unlock();
+    cv_.notify_one();
+
+    worker_result_.wait();
+    socket_ = nullptr;
+}
+//------------------------------------------------------------------------------
 } // namespace homeostas
 //------------------------------------------------------------------------------

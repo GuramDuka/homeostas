@@ -86,7 +86,7 @@ extern "C" int getdomainname(char * name, size_t len)
     // too small.  bionic follows the historical libc policy of returning EINVAL,
     // instead of glibc's policy of copying the first len bytes without a NULL
     // terminator.
-    if( strlen(uts.domainname) >= len ) {
+    if( std::slen(uts.domainname) >= len ) {
         errno = EINVAL;
         return -1;
     }
@@ -98,49 +98,6 @@ extern "C" int getdomainname(char * name, size_t len)
 }
 //------------------------------------------------------------------------------
 #endif
-//------------------------------------------------------------------------------
-#if _WIN32 && _MSC_VER
-//------------------------------------------------------------------------------
-int clock_gettime(int /*dummy*/, struct timespec * ct)
-{
-    static thread_local bool initialized = false;
-    static thread_local uint64_t freq = 0;
-
-    if( !initialized ) {
-        LARGE_INTEGER f;
-
-        if( QueryPerformanceFrequency(&f) != FALSE )
-            freq = f.QuadPart;
-
-        initialized = true;
-    }
-
-    LARGE_INTEGER t;
-
-    if( freq == 0 ) {
-        FILETIME f;
-        GetSystemTimeAsFileTime(&f);
-
-        t.QuadPart = f.dwHighDateTime;
-        t.QuadPart <<= 32;
-        t.QuadPart |= f.dwLowDateTime;
-
-        ct->tv_sec = decltype(ct->tv_sec)((t.QuadPart / 10000000));
-        ct->tv_nsec = decltype(ct->tv_nsec)((t.QuadPart % 10000000) * 100); // FILETIME is in units of 100 nsec.
-    }
-    else {
-        QueryPerformanceCounter(&t);
-        ct->tv_sec = decltype(ct->tv_sec)((t.QuadPart / freq));
-        //uint64_t q = t.QuadPart % freq;
-        //freq -> 1000000000ns
-        //q    -> x?
-        ct->tv_nsec = decltype(ct->tv_nsec)((t.QuadPart % freq) * 1000000000 / freq);
-    }
-
-    return 0;
-}
-//------------------------------------------------------------------------------
-#endif // global namespace
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
@@ -295,7 +252,7 @@ std::string temp_name(std::string dir, std::string pfx)
 
 	do {
 		struct timespec ts;
-        ::clock_gettime(CLOCK_REALTIME, &ts);
+        clock_gettime(CLOCK_REALTIME, ts);
 
         int m = int(ts.tv_sec ^ uintptr_t(&s[0]) ^ uintptr_t(&s));
         int n = int(ts.tv_nsec ^ uintptr_t(&s[0]) ^ uintptr_t(&s));
@@ -338,7 +295,7 @@ std::string get_cwd(bool no_back_slash)
 		s.resize(s.size() << 1);
     }
 
-    s.resize(slen(s.c_str()));
+    s.resize(std::slen(s.c_str()));
 
     if( s.empty() )
         s = ".";
@@ -380,14 +337,101 @@ std::string path2rel(const std::string & path, bool no_back_slash)
 	return file_path;
 }
 //------------------------------------------------------------------------------
+int clock_gettime(int dummy, struct timespec & ct)
+{
+#if _WIN32
+    if( dummy == CLOCK_REALTIME ) {
+        constexpr const uint64_t secs_epoch  = 11644473600u; // Seconds between 1.1.1601 and 1.1.1970
+        constexpr const uint64_t nsecs_epoch = secs_epoch * 10000000u; // units of 100 nsec
+        static thread_local uint64_t freq = 0, start = 0, stp = 0;
+        FILETIME f;
+        ULARGE_INTEGER q;
+        LARGE_INTEGER t;
+
+        if( QueryPerformanceFrequency(&t) != FALSE && t.QuadPart != 0 && freq != uint64_t(t.QuadPart) ) {
+            freq = t.QuadPart;
+            GetSystemTimeAsFileTime(&f);
+            QueryPerformanceCounter(&t);
+            q.LowPart = f.dwLowDateTime;
+            q.HighPart = f.dwHighDateTime;
+            q.QuadPart = (q.QuadPart - nsecs_epoch) * 100u; // nanoseconds
+            // to avoid overflow calculate separately seconds and nanoseconds
+            start = (q.QuadPart / 1000000000u) * freq + (q.QuadPart % 1000000000u) * freq / 1000000000u; // freq ticks
+            stp = t.QuadPart;
+        }
+        else
+            freq = 0;
+
+        if( freq == 0 ) {
+            GetSystemTimeAsFileTime(&f);
+            q.LowPart = f.dwLowDateTime;
+            q.HighPart = f.dwHighDateTime;
+
+            ct.tv_sec  = decltype(ct.tv_sec) (q.QuadPart / 10000000u) - secs_epoch;
+            ct.tv_nsec = decltype(ct.tv_nsec) ((q.QuadPart % 10000000u) * 100u); // FILETIME is in units of 100 nsec.
+        }
+        else {
+            QueryPerformanceCounter(&t);
+            t.QuadPart -= stp;
+            t.QuadPart += start;
+            ct.tv_sec = decltype(ct.tv_sec) (t.QuadPart / freq);
+            //uint64_t q = t.QuadPart % freq;
+            //freq -> 1000000000ns
+            //q    -> x?
+            ct.tv_nsec = decltype(ct.tv_nsec) ((t.QuadPart % freq) * 1000000000u / freq);
+        }
+
+        return 0;
+    }
+#   if __MINGW32__
+    return ::clock_gettime(dummy, &ct);
+#   else
+    errno = ENOSYS;
+    return -1;
+#   endif
+#else
+    return ::clock_gettime(dummy, &ct);
+#endif
+}
+//------------------------------------------------------------------------------
 uint64_t clock_gettime_ns()
 {
     struct timespec ts;
 
-    if( ::clock_gettime(CLOCK_REALTIME, &ts) != 0 )
+    if( clock_gettime(CLOCK_REALTIME, ts) != 0 )
         throw std::xruntime_error("clock_gettime failed", __FILE__, __LINE__);
 
     return 1000000000ull * ts.tv_sec + ts.tv_nsec;
+}
+//------------------------------------------------------------------------------
+uint64_t entropy_fast()
+{
+    auto f = &entropy_fast;
+    union {
+        struct {
+            uint64_t ts;
+            void * p0;
+            uintptr_t p1;
+            void * p2;
+            uintptr_t p3;
+            uint8_t ff[sizeof(f)];
+        };
+        uint64_t g[16]; // some garbage on stack
+    } a;
+
+    a.ts = clock_gettime_ns();
+    memcpy(&a.ff, &f, sizeof(f));
+    a.p0 = &a;
+    a.p1 = uintptr_t(&a) ^ uintptr_t(a.ts);
+    a.p2 = (void *) std::rhash(a.p1);
+    a.p3 = uintptr_t(a.ts) ^ uintptr_t(a.p0);
+
+    uint64_t h = clock_gettime_ns() ^ std::rhash(a.ts >> 5) ^ (a.ts << 3);
+
+    for( auto g : a.g )
+        h = std::ihash(g, h);
+
+    return h;
 }
 //------------------------------------------------------------------------------
 } // namespace homeostas

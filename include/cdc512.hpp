@@ -29,7 +29,6 @@
 //------------------------------------------------------------------------------
 #include "config.h"
 //------------------------------------------------------------------------------
-#include "locale_traits.hpp"
 #include "std_ext.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
@@ -222,11 +221,12 @@ struct integer {
 struct cdc512 : public std::key512 {
     uint64_t p;
 
-    cdc512() {
+    cdc512() : std::key512(std::leave_uninitialized) {
         init();
     }
     
-    cdc512(leave_uninitialized_type) {}
+    cdc512(std::leave_uninitialized_type t) : std::key512(t) {}
+    cdc512(std::zero_initialized_type t) : std::key512(t) {}
 
     cdc512(const std::key512 & o) : std::key512(o) {}
 
@@ -239,14 +239,14 @@ struct cdc512 : public std::key512 {
     cdc512(InitIt i_first, InitIt i_last, InputIt first, InputIt last) {
         init(i_first, i_last);
         update(first, last);
-        finish();
+        final();
     }
 
     template <class InputIt>
     cdc512(InputIt first, InputIt last) {
         init();
         update(first, last);
-        finish();
+        final();
     }
 
     template <typename InputIt>
@@ -262,7 +262,7 @@ struct cdc512 : public std::key512 {
 
     cdc512 & init();
     cdc512 & update(const void * data, uintptr_t size);
-    cdc512 & finish();
+    cdc512 & final();
 
     /*std::string to_string() const;
 
@@ -284,6 +284,18 @@ void cdc512_test();
 } // namespace tests
 //------------------------------------------------------------------------------
 } // namespace homeostas
+//------------------------------------------------------------------------------
+#if __GNUC__ > 0 && __GNUC__ < 5 && __ANDROID__
+//------------------------------------------------------------------------------
+namespace std {
+//------------------------------------------------------------------------------
+inline string to_string(const homeostas::cdc512 & b) {
+    return to_string(*static_cast<const key512 *>(&b));
+}
+//------------------------------------------------------------------------------
+} // namespace std
+//------------------------------------------------------------------------------
+#endif
 //------------------------------------------------------------------------------
 #endif // CDC512_HPP_INCLUDED
 //------------------------------------------------------------------------------

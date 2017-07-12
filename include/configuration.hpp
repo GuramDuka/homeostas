@@ -168,11 +168,12 @@ protected:
     std::string name_;
     std::variant value_;
 #ifndef NDEBUG
-    const bool & bool_               = value_.reference<bool>();
-    const int64_t & int_             = value_.reference<int64_t>();
-    const double & real_             = value_.reference<double>();
-    const std::string & string_      = value_.reference<std::string>();
-    const std::blob & blob_          = value_.reference<std::blob>();
+    const bool & bool_               = value_.ref_debug<bool>();
+    const int64_t & int_             = value_.ref_debug<int64_t>();
+    const double & real_             = value_.ref_debug<double>();
+    const std::string & string_      = value_.ref_debug<std::string>();
+    const std::blob & blob_          = value_.ref_debug<std::blob>();
+    const std::key512 & key_         = value_.ref_debug<std::key512>();
 #endif
 
     //mutable childs_type childs_;
@@ -240,7 +241,7 @@ public:
 #if QT_CORE_LIB
     struct string_hash {
         size_t operator () (const QString & val) const {
-            return std::ihash<size_t>(val.begin(), val.end(),
+            return std::ithash<size_t>(val.begin(), val.end(),
                 [] (const auto & c) { return c.unicode(); });
         }
     };
@@ -273,6 +274,7 @@ public:
         st_sel_by_pid_ = nullptr;
         st_ins_ = nullptr;
         st_upd_ = nullptr;
+        st_row_next_id_ = nullptr;
         db_ = nullptr;
         return *this;
     }
@@ -339,9 +341,8 @@ private:
         }
         else {
             bindex(st_ins_);
-            st_ins_->bind("id", std::rhash(row_next_id_));
+            st_ins_->bind("id", row_next_id_());
             val_setter(st_ins_);
-            row_next_id_++;
         }
 
         return *this;
@@ -366,15 +367,15 @@ private:
                     break;
                 case std::variant::Text            :
                     st->bind("value_type", int8_t(std::variant::Text));
-                    st->bind("value_s", val.reference<std::string>(), sqlite3pp::nocopy);
+                    st->bind("value_s", val.ref<std::string>(), sqlite3pp::nocopy);
                     break;
                 case std::variant::Blob            :
                     st->bind("value_type", int8_t(std::variant::Blob));
-                    st->bind("value_l", val.reference<std::blob>(), sqlite3pp::nocopy);
+                    st->bind("value_l", val.ref<std::blob>(), sqlite3pp::nocopy);
                     break;
                 case std::variant::Key512          :
                     st->bind("value_type", int8_t(std::variant::Key512));
-                    st->bind("value_l", val.reference<std::key512>(), sqlite3pp::nocopy);
+                    st->bind("value_l", val.ref<std::key512>(), sqlite3pp::nocopy);
                     break;
                 default                         :
                     throw std::xruntime_error("Invalid variant type", __FILE__, __LINE__);
@@ -384,8 +385,10 @@ private:
         });
     }
 
-    uint64_t row_next_id_;
+    uint64_t row_id_;
+    std::function<uint64_t()> row_next_id_;
     std::unique_ptr<sqlite3pp::database> db_;
+    std::unique_ptr<sqlite3pp::query> st_row_next_id_;
     std::unique_ptr<sqlite3pp::query> st_sel_;
     std::unique_ptr<sqlite3pp::query> st_sel_by_pid_;
     std::unique_ptr<sqlite3pp::command> st_ins_;

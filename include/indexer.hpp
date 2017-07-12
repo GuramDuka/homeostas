@@ -40,7 +40,7 @@
 #include <forward_list>
 //------------------------------------------------------------------------------
 #include "sqlite3pp/sqlite3pp.h"
-#include "locale_traits.hpp"
+#include "std_ext.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
@@ -91,23 +91,27 @@ struct directory_reader {
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 class directory_indexer {
-    private:
-        bool modified_only_ = true;
-    protected:
-    public:
-        const auto & modified_only() const {
-            return modified_only_;
-        }
+public:
+    directory_indexer() {}
 
-        directory_indexer & modified_only(decltype(modified_only_) modified_only) {
-            modified_only_ = modified_only;
-            return *this;
-        }
+    const auto & modified_only() const {
+        return modified_only_;
+    }
 
-        void reindex(
-            sqlite3pp::database & db,
-            const std::string & dir_path_name,
-            bool * p_shutdown = nullptr);
+    directory_indexer & modified_only(bool modified_only) {
+        modified_only_ = modified_only;
+        return *this;
+    }
+
+    void reindex(
+        sqlite3pp::database & db,
+        const std::string & dir_path_name,
+        bool * p_shutdown = nullptr);
+protected:
+    bool modified_only_ = true;
+private:
+    directory_indexer(const directory_indexer &) = delete;
+    void operator = (const directory_indexer &) = delete;
 };
 //------------------------------------------------------------------------------
 namespace tests {

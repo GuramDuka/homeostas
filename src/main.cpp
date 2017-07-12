@@ -51,6 +51,7 @@ int main(int argc, char ** argv)
     //homeostas::tests::run_tests();
 
     at_scope_exit(
+        Homeostas::instance()->stopClient();
         Homeostas::instance()->stopServer();
         Homeostas::instance()->stopTrackers();
     );
@@ -83,8 +84,11 @@ int main(int argc, char ** argv)
 
         return app.exec();
     }
-#else
+#endif
+
+#ifndef Q_OS_ANDROID
     if( daemon ) {
+        QCoreApplication app(argc, argv);
         try {
             Homeostas::instance()->startTrackers();
             Homeostas::instance()->startServer();
@@ -97,25 +101,24 @@ int main(int argc, char ** argv)
         }
     }
 #endif
-    else {
-        try {
-// debug testing only
-#if !defined(Q_OS_ANDROID) && !defined(NDEBUG)
-            Homeostas::instance()->startTrackers();
-            Homeostas::instance()->startServer();
-#endif
-            Homeostas::instance()->startClient();
-        }
-        catch( const std::exception & e ) {
-            qDebug().noquote().nospace() << e.what();
-        }
-        catch( ... ) {
-            qDebug().noquote().nospace() << "undefined c++ exception catched";
-        }
-    }
 
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QGuiApplication app(argc, argv);
+
+// debug testing only
+#ifndef Q_OS_ANDROID
+    try {
+        Homeostas::instance()->startTrackers();
+        Homeostas::instance()->startServer();
+        Homeostas::instance()->startClient();
+    }
+    catch( const std::exception & e ) {
+        qDebug().noquote().nospace() << e.what();
+    }
+    catch( ... ) {
+        qDebug().noquote().nospace() << "undefined c++ exception catched";
+    }
+#endif
 
     //qmlRegisterType<DirectoryTracker>("com.homeostas.directorytracker", 1, 0, "QDirectoryTracker");
     //qmlRegisterType<DirectoriesTrackersModel>("Backend", 1, 0, "DirectoriesTrackersModel");

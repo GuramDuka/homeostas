@@ -42,13 +42,10 @@ android {
 
     isEmpty(QMAKE_CFLAGS_OPTIMIZE_FULL): QMAKE_CFLAGS_OPTIMIZE_FULL = -O3
     isEmpty(QMAKE_CXXFLAGS_OPTIMIZE_FULL): QMAKE_CXXFLAGS_OPTIMIZE_FULL = -O3
-
-    CONFIG(release, debug|release) {
-        DEFINES += NDEBUG
-    }
 }
 
 CONFIG(release, debug|release) {
+    DEFINES += NDEBUG
     CONFIG += optimize_full
 }
 
@@ -89,12 +86,10 @@ HEADERS += \
     include/client.hpp \
     include/config.h \
     include/indexer.hpp \
-    include/locale_traits.hpp \
     include/natpmp.hpp \
     include/port.hpp \
     include/qobjects.hpp \
     include/rand.hpp \
-    include/scope_exit.hpp \
     include/server.hpp \
     include/socket.hpp \
     include/std_ext.hpp \
@@ -116,7 +111,8 @@ HEADERS += \
     include/variant.hpp \
     include/discoverer.hpp \
     include/socket_stream.hpp \
-    include/ciphers.hpp
+    include/ciphers.hpp \
+    include/sha512.hpp
 
 SOURCES += \
     tests/all_tests.cpp \
@@ -134,7 +130,6 @@ SOURCES += \
     src/indexer.cpp \
     src/main.cpp \
     src/sqlite3.c \
-    src/locale_traits.cpp \
     src/tracker.cpp \
     src/port.cpp \
     src/qobjects.cpp \
@@ -146,4 +141,5 @@ SOURCES += \
     src/thread_pool.cpp \
     src/announcer.cpp \
     src/configuration.cpp \
-    src/discoverer.cpp
+    src/discoverer.cpp \
+    src/sha512.cpp

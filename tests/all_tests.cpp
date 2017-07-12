@@ -24,7 +24,7 @@
 //------------------------------------------------------------------------------
 #include <iostream>
 //------------------------------------------------------------------------------
-#include "locale_traits.hpp"
+#include "std_ext.hpp"
 #include "cdc512.hpp"
 #include "rand.hpp"
 #include "indexer.hpp"

@@ -31,6 +31,7 @@
 //------------------------------------------------------------------------------
 #include <memory>
 #include <thread>
+#include <future>
 #include <mutex>
 #include <atomic>
 #include <condition_variable>
@@ -120,10 +121,6 @@ public:
         return *this;
     }
 
-    bool started() const {
-        return thread_ != nullptr;
-    }
-
     void startup();
     void shutdown();
 protected:
@@ -134,15 +131,16 @@ protected:
     std::string db_path_name_;
 
     std::string error_;
-    std::unique_ptr<std::thread> thread_;
+    std::shared_future<void> worker_result_;
     std::mutex mtx_;
     std::condition_variable cv_;
 
+    bool started_  = false;
     bool shutdown_ = false;
-    bool oneshot_ = false;
+    bool oneshot_  = false;
 private:
-    directory_tracker(const directory_tracker &);
-    void operator = (const directory_tracker &);
+    directory_tracker(const directory_tracker &) = delete;
+    void operator = (const directory_tracker &) = delete;
 };
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////

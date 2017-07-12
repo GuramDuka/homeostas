@@ -40,13 +40,15 @@ enum Proto {
 enum Encryption {
     EncryptionNone   = 0,
     EncryptionLight  = 1,
-    EncryptionStrong = 2
+    EncryptionStrong = 2,
+    EncryptionMaxValue
 };
 //------------------------------------------------------------------------------
 enum Compression {
     CompressionNone = 0,
     CompressionLZ4  = 1,
-    CompressionZSTD = 2
+    CompressionZSTD = 2,
+    CompressionMaxValue
 };
 //------------------------------------------------------------------------------
 enum Option {
@@ -57,14 +59,17 @@ enum Option {
 };
 //------------------------------------------------------------------------------
 enum Error {
-    ErrorNone                = 0,
-    ErrorRestartHandshake    = 1, // not error
-    ErrorInvalidProto        = 2,
-    ErrorInvalidEncryption   = 3,
-    ErrorEncryptionRequired  = 4,
-    ErrorInvalidCompression  = 5,
-    ErrorCompressionRequired = 6,
-    ErrorInvalidFingerprint  = 7
+    ErrorNone                 =  0,
+    ErrorRestartHandshake     =  1,
+    ErrorInvalidProto         =  2,
+    ErrorInvalidEncryption    =  3,
+    ErrorEncryptionDisabled   =  4,
+    ErrorEncryptionRequired   =  5,
+    ErrorInvalidCompression   =  6,
+    ErrorCompressionDisabled  =  7,
+    ErrorCompressionRequired  =  8,
+    ErrorInvalidFingerprint   =  9,
+    ErrorInvalidHostPublicKey = 10
 };
 //------------------------------------------------------------------------------
 inline void throw_if_error(Error e) {
@@ -75,14 +80,20 @@ inline void throw_if_error(Error e) {
             throw std::xruntime_error("Invalid protocol", __FILE__, __LINE__);
         case ErrorInvalidEncryption   :
             throw std::xruntime_error("Invalid encryption type", __FILE__, __LINE__);
+        case ErrorEncryptionDisabled  :
+            throw std::xruntime_error("Encryption disabled", __FILE__, __LINE__);
         case ErrorEncryptionRequired  :
             throw std::xruntime_error("Encryption required", __FILE__, __LINE__);
         case ErrorInvalidCompression  :
             throw std::xruntime_error("Invalid compression type", __FILE__, __LINE__);
+        case ErrorCompressionDisabled :
+            throw std::xruntime_error("Compression disabled", __FILE__, __LINE__);
         case ErrorCompressionRequired :
             throw std::xruntime_error("Compression required", __FILE__, __LINE__);
         case ErrorInvalidFingerprint  :
             throw std::xruntime_error("Invalid fingerprint", __FILE__, __LINE__);
+        case ErrorInvalidHostPublicKey:
+            throw std::xruntime_error("Invalid host public key", __FILE__, __LINE__);
         default                       :
             throw std::xruntime_error("Unknown error", __FILE__, __LINE__);
     }
@@ -100,7 +111,7 @@ inline void throw_if_error(uint8_t e) {
 //------------------------------------------------------------------------------
 struct PACKED packet {
     void generate_session_key() {
-        cdc512 ctx(leave_uninitialized);
+        cdc512 ctx(std::leave_uninitialized);
         ctx.generate_entropy_fast();
         std::copy(std::begin(session_key), std::end(session_key), std::begin(ctx), std::end(ctx));
     }
@@ -110,6 +121,24 @@ struct PACKED packet {
         chiper->init(session_key);
         auto arena = std::make_range(public_key, sizeof(*this) - offsetof(packet, public_key));
         chiper->encode(arena, arena);
+    }
+
+    void fix() {
+        if( encryption_option != handshake::OptionDisable
+                && (encryption == handshake::EncryptionNone
+                    || encryption >= handshake::EncryptionMaxValue) )
+            encryption = handshake::EncryptionStrong;
+        else if( encryption_option == handshake::OptionDisable
+                && encryption != handshake::EncryptionNone )
+            encryption = handshake::EncryptionNone;
+
+        if( compression_option != handshake::OptionDisable
+                && (compression == handshake::CompressionNone
+                    || compression >= handshake::CompressionMaxValue) )
+            compression = handshake::CompressionLZ4;
+        else if( compression_option == handshake::OptionDisable
+                && compression != handshake::CompressionNone )
+            encryption = handshake::CompressionNone;
     }
 
     std::key512::value_type session_key[std::key512::ssize()];
@@ -126,6 +155,33 @@ struct PACKED packet {
 #if _WIN32
 #   pragma pack()
 #endif
+//------------------------------------------------------------------------------
+inline void negotiate(packet * server, packet * client) {
+    if( client->proto_version != server->proto_version )
+        server->error = handshake::ErrorInvalidProto;
+    // encryption required on client side but disabled on server side
+    else if( client->encryption_option == handshake::OptionDisable
+         && server->encryption_option == handshake::OptionRequired )
+        server->error = handshake::ErrorEncryptionDisabled;
+    // encryption required on server side but disabled on client side
+    else if( client->encryption_option == handshake::OptionRequired
+         && server->encryption_option == handshake::OptionDisable )
+        server->error = handshake::ErrorEncryptionRequired;
+    // check encryption range
+    else if( client->encryption >= handshake::EncryptionMaxValue )
+        server->error = handshake::ErrorInvalidEncryption;
+    // compression required on client side but disabled on server side
+    else if( client->compression_option == handshake::OptionDisable
+         && server->compression_option == handshake::OptionRequired )
+        server->error = handshake::ErrorCompressionDisabled;
+    // compression required on server side but disabled on client side
+    else if( client->compression_option == handshake::OptionRequired
+         && server->compression_option == handshake::OptionDisable )
+        server->error = handshake::ErrorCompressionRequired;
+    // check compression range
+    else if( client->compression >= handshake::CompressionMaxValue )
+        server->error = handshake::ErrorInvalidCompression;
+}
 //------------------------------------------------------------------------------
 } // namespace handshake
 //------------------------------------------------------------------------------
@@ -168,6 +224,7 @@ public:
         setg(gbuf_->data(), gbuf_->data() + gbuf_->size(), gbuf_->data() + gbuf_->size());
         pbuf_ = std::make_unique<pbuf_type>();
         setp(pbuf_->data(), pbuf_->data() + pbuf_->size());
+        handshaked_ = false;
     }
 
     void reset(basic_socket & socket) {
@@ -348,34 +405,71 @@ public:
         handshake_functor_ = f;
         return *this;
     }
+
+    auto & proto(const handshake::Proto & proto) {
+        proto_ = proto;
+        return *this;
+    }
+
+    const auto & proto() const {
+        return proto_;
+    }
+
+    auto & encryption(const handshake::Encryption & e) {
+        encryption_ = e;
+        return *this;
+    }
+
+    const auto & encryption() const {
+        return encryption_;
+    }
+
+    auto & encryption_option(const handshake::Option & o) {
+        encryption_option_ = o;
+        return *this;
+    }
+
+    const auto & encryption_option() const {
+        return encryption_option_;
+    }
+
+    auto & compression(const handshake::Compression & e) {
+        compression_ = e;
+        return *this;
+    }
+
+    const auto & compression() const {
+        return compression_;
+    }
+
+    auto & compression_option(const handshake::Option & o) {
+        compression_option_ = o;
+        return *this;
+    }
+
+    const auto & compression_option() const {
+        return compression_option_;
+    }
 protected:
     handshake_functor_t handshake_functor_;
 
     void client_side_handshake() {
-        if( proto_ == handshake::ProtocolRAW || handshaked_ )
+        using namespace handshake;
+
+        if( proto_ == ProtocolRAW || handshaked_ )
             return;
 
         auto exceptions_safe = socket_->exceptions();
         at_scope_exit( socket_->exceptions(exceptions_safe) );
         socket_->exceptions(true);
 
-        if( proto_ == handshake::ProtocolV1 ) {
+        if( proto_ == ProtocolV1 ) {
             auto req = std::make_unique<handshake::packet>();
-
-            req->proto_version      = proto_;
-            req->encryption         = encryption_;
-            req->encryption_option  = encryption_option_;
-            req->compression        = compression_;
-            req->compression_option = compression_option_;
-
             auto res = std::make_unique<handshake::packet>();
-
-            int ntry;
-
-            for( ntry = 5; ntry > 0; ntry-- ) {
+            auto xchg = [&] {
+                req->error = ErrorNone;
                 req->generate_session_key();
-
-                handshake_functor_(req.get(), nullptr, nullptr, nullptr);
+                req->fix();
 
                 req->scramble();
                 socket_->send(req.get(), sizeof(*req));
@@ -388,20 +482,39 @@ protected:
 
                 res->scramble();
 
-                // throw server error
-                if( res->error != handshake::ErrorNone )
-                    handshake::throw_if_error(res->error);
+                throw_if_error(res->error);
+
+                negotiate(req.get(), res.get());
+
+                throw_if_error(req->error);
+
+                req->encryption  = res->encryption;
+                req->compression = res->compression;
 
                 handshake_functor_(req.get(), res.get(), nullptr, nullptr);
+                throw_if_error(req->error);
+            };
 
-                // throw client error
-                if( req->error != handshake::ErrorNone )
-                    handshake::throw_if_error(req->error);
+            handshake_functor_(req.get(), nullptr, nullptr, nullptr);
+            throw_if_error(req->error);
 
+            req->proto_version      = proto_;
+            req->encryption_option  = encryption_option_;
+            req->compression_option = compression_option_;
+            req->encryption         = encryption_option_  == OptionDisable || encryption_option_  == OptionAllow ? EncryptionNone  : encryption_;
+            req->compression        = compression_option_ == OptionDisable || compression_option_ == OptionAllow ? CompressionNone : compression_;
+
+            xchg();
+
+            if( req->encryption != EncryptionNone ) {
                 std::key512 local_transport_key, remote_transport_key;
                 handshake_functor_(req.get(), res.get(), &local_transport_key, &remote_transport_key);
-
                 init_ciphers(local_transport_key, remote_transport_key);
+                encryption_ = Encryption(req->encryption);
+            }
+
+            if( req->compression != CompressionNone ) {
+                compression_ = Compression(req->compression);
             }
         }
 
@@ -409,19 +522,19 @@ protected:
     }
 
     void server_side_handshake() {
-        if( proto_ == handshake::ProtocolRAW || handshaked_ )
+        using namespace handshake;
+
+        if( proto_ == ProtocolRAW || handshaked_ )
             return;
 
         auto exceptions_safe = socket_->exceptions();
         at_scope_exit( socket_->exceptions(exceptions_safe) );
         socket_->exceptions(false);
 
-        if( proto_ == handshake::ProtocolV1 ) {
+        if( proto_ == ProtocolV1 ) {
             auto req = std::make_unique<handshake::packet>();
             auto res = std::make_unique<handshake::packet>();
-            int ntry;
-
-            for( ntry = 5; ntry > 0; ntry-- ) {
+            auto xchg = [&] {
                 auto r = socket_->recv(req.get(), sizeof(*req));
 
                 if( r != sizeof(*req) )
@@ -429,51 +542,46 @@ protected:
 
                 req->scramble();
 
-                handshake_functor_(req.get(), nullptr, nullptr, nullptr);
-
-                res->proto_version      = proto_;
-                res->encryption         = encryption_;
-                res->encryption_option  = encryption_option_;
-                res->compression        = compression_;
-                res->compression_option = compression_option_;
+                res->error = ErrorNone;
                 res->generate_session_key();
+                res->fix();
 
-                if( req->proto_version != res->proto_version )
-                    res->error = handshake::ErrorInvalidProto;
-                else
-                    res->error = handshake::ErrorNone;
+                negotiate(res.get(), req.get());
+
+                throw_if_error(res->error);
+
+                if( encryption_option_ == OptionAllow )
+                    res->encryption = req->encryption;
+
+                if( compression_option_ == OptionAllow )
+                    res->compression = req->compression;
 
                 handshake_functor_(req.get(), res.get(), nullptr, nullptr);
+                throw_if_error(res->error);
 
-                res->scramble();
+                req->scramble();
                 socket_->send(res.get(), sizeof(*res));
-                res->scramble();
+                req->scramble();
+            };
 
-                r = socket_->recv(&req->error, sizeof(req->error));
+            res->proto_version      = proto_;
+            res->encryption_option  = encryption_option_;
+            res->compression_option = compression_option_;
+            res->encryption         = encryption_;
+            res->compression        = compression_;
 
-                if( r != sizeof(req->error) )
-                    throw std::xruntime_error("Network error", __FILE__, __LINE__);
+            xchg();
 
-                if( req->error == handshake::ErrorRestartHandshake )
-                    continue;
-
-                // throw my error
-                if( res->error != handshake::ErrorNone )
-                    handshake::throw_if_error(res->error);
-
-                // throw client error
-                if( req->error != handshake::ErrorNone )
-                    handshake::throw_if_error(req->error);
-
+            if( res->encryption != EncryptionNone ) {
                 std::key512 local_transport_key, remote_transport_key;
                 handshake_functor_(req.get(), res.get(), &local_transport_key, &remote_transport_key);
-
                 init_ciphers(local_transport_key, remote_transport_key);
-                break;
+                encryption_ = Encryption(res->encryption);
             }
 
-            if( ntry == 0 )
-                throw std::xruntime_error("The maximum number of handshakes has been exceeded", __FILE__, __LINE__);
+            if( res->compression != CompressionNone ) {
+                compression_ = Compression(res->compression);
+            }
         }
 
         handshaked_ = true;
@@ -514,7 +622,7 @@ protected:
     handshake::Option              encryption_option_  = handshake::OptionDisable;
     handshake::Compression         compression_        = handshake::CompressionNone;
     handshake::Option              compression_option_ = handshake::OptionDisable;
-    bool                           handshaked_         = false;
+    bool                           handshaked_;
 };
 //------------------------------------------------------------------------------
 typedef basic_socket_streambuf<char, std::char_traits<char>> socket_streambuf;
@@ -669,33 +777,6 @@ public:
         unsetf(std::ios::unitbuf);
     }
 
-    //template <typename T,
-    //    typename std::enable_if<
-    //        std::is_base_of<T, std::basic_string<typename T::value_type, typename T::traits_type, typename T::allocator_type>>::value &&
-    //        std::is_same<typename T::value_type, _Elem>::value &&
-    //        std::is_same<typename T::traits_type, _Traits>::value
-    //    >::type * = nullptr
-    //>
-    //auto & operator << (const T & s) {
-    //    // send a null-terminated string
-    //    *static_cast<std::basic_ostream<_Elem, _Traits> *>(this) << (s) << std::ends;
-    //    return *this;
-    //}
-
-    //typedef std::basic_ostream<_Elem, _Traits> & (* __func_manipul_type)(std::basic_ostream<_Elem, _Traits> &);
-
-    //basic_socket_ostream<_Elem, _Traits> & operator << (__func_manipul_type f) {
-
-    //template <typename T,
-    //    typename std::enable_if<
-    //        std::is_base_of<T, std::basic_ostream<_Elem, _Traits>>::value
-    //    >::type * = nullptr
-    //>
-    //basic_socket_ostream<_Elem, _Traits> & operator << (T & (* f)(T &)) {
-    //    (*f) (*this);
-    //    return *this;
-    //}
-
     basic_socket_ostream<_Elem, _Traits> & write(const _Elem * s) {
         static_cast<std::basic_ostream<_Elem, _Traits> *>(this)->write(s, slen(s));
         return *this;
@@ -794,19 +875,8 @@ public:
     typedef std::ios_base::iostate iostate;
 #endif
 
-    template <typename T,
-        typename std::enable_if<
-            std::is_base_of<T, std::unique_ptr<typename T::element_type, typename T::deleter_type>>::value
-        >::type * = nullptr
-    >
+    template <typename T, typename std::enable_if<std::container_traits<T>::is_unique_or_shared_ptr>::type * = nullptr>
     basic_socket_stream(T & socket) : basic_socket_stream(*socket) {}
-
-    template <typename T,
-        typename std::enable_if<
-            std::is_base_of<T, std::shared_ptr<typename T::element_type>>::value
-        >::type * = nullptr
-    >
-    basic_socket_stream(T socket) : basic_socket_stream(*socket) {}
 
     basic_socket_stream(basic_socket & socket) : basic_socket_stream(&socket) {}
 
@@ -841,21 +911,8 @@ public:
         basic_socket_ostream<_Elem, _Traits>::clear();
     }
 
-    template <typename T,
-        typename std::enable_if<
-            std::is_base_of<T, std::unique_ptr<typename T::element_type, typename T::deleter_type>>::value
-        >::type * = nullptr
-    >
+    template <typename T, typename std::enable_if<std::container_traits<T>::is_unique_or_shared_ptr>::type * = nullptr>
     void reset(T & socket) {
-        reset(*socket);
-    }
-
-    template <typename T,
-        typename std::enable_if<
-            std::is_base_of<T, std::shared_ptr<typename T::element_type>>::value
-        >::type * = nullptr
-    >
-    void reset(T socket) {
         reset(*socket);
     }
 };
