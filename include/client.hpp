@@ -80,10 +80,20 @@ public:
     const auto & server_public_key() const {
         return server_public_key_;
     }
+
+    auto & client_public_key(const std::key512 & key) {
+        client_public_key_ = key;
+        return *this;
+    }
+
+    const auto & client_public_key() const {
+        return client_public_key_;
+    }
 protected:
     void worker();
 
     std::key512 server_public_key_;
+    std::key512 client_public_key_;
     std::function<void()> task_;
     std::unique_ptr<active_socket> socket_;
     std::shared_future<void> worker_result_;

@@ -439,31 +439,94 @@ static __inline__ uint64_t le64dec(const void *pp)
 //------------------------------------------------------------------------------
 // On Android for armeabi-v7a GCC 4.9:  __cplusplus == 201300L
 //------------------------------------------------------------------------------
-#if (defined(_MSC_VER) && _MSC_VER < 1900) || (!defined(_MSC_VER) && __cplusplus < 201300L)
-#   error This code needs at least a C++14 compliant compiler
-#endif
-//------------------------------------------------------------------------------
-#if __GNUG__
-#   include <stddef.h>
-#endif
-#include <ctime>
-#include <climits>
-#include <cinttypes>
-#include <cstdint>
-//------------------------------------------------------------------------------
-#if !defined(PACKED)
-#   if __GNUC__
-#       define PACKED __attribute__ ((packed))
-#   else
-#       define PACKED
+#   if (defined(_MSC_VER) && _MSC_VER < 1900) || (!defined(_MSC_VER) && __cplusplus < 201300L)
+#       error This code needs at least a C++14 compliant compiler
 #   endif
-#endif
+//------------------------------------------------------------------------------
+#   if __GNUG__
+#       include <stddef.h>
+#   endif
+#   include <ctime>
+#   include <climits>
+#   include <cinttypes>
+#   include <cstdint>
+#   include <type_traits>
+//------------------------------------------------------------------------------
+#   if !defined(PACKED)
+#       if __GNUC__
+#           define PACKED __attribute__ ((packed))
+#       else
+#           define PACKED
+#       endif
+#   endif
 //------------------------------------------------------------------------------
 namespace std {
+//------------------------------------------------------------------------------
 struct leave_uninitialized_type {};
 constexpr const leave_uninitialized_type leave_uninitialized = {};
 struct zero_initialized_type {};
 constexpr const zero_initialized_type zero_initialized = {};
+//------------------------------------------------------------------------------
+template <typename T, typename enable_if<is_same<T, uint16_t>::value>::type * = nullptr>
+inline T htole(const T & v) {
+    return ::htole16(v);
+}
+//------------------------------------------------------------------------------
+template <typename T, typename enable_if<is_same<T, uint32_t>::value>::type * = nullptr>
+inline T htole(const T & v) {
+    return ::htole32(v);
+}
+//------------------------------------------------------------------------------
+template <typename T, typename enable_if<is_same<T, uint64_t>::value>::type * = nullptr>
+inline T htole(const T & v) {
+    return ::htole64(v);
+}
+//------------------------------------------------------------------------------
+template <typename T, typename enable_if<is_same<T, uint16_t>::value>::type * = nullptr>
+inline T htobe(const T & v) {
+    return ::htobe16(v);
+}
+//------------------------------------------------------------------------------
+template <typename T, typename enable_if<is_same<T, uint32_t>::value>::type * = nullptr>
+inline T htobe(const T & v) {
+    return ::htobe32(v);
+}
+//------------------------------------------------------------------------------
+template <typename T, typename enable_if<is_same<T, uint64_t>::value>::type * = nullptr>
+inline T htobe(const T & v) {
+    return ::htobe64(v);
+}
+//------------------------------------------------------------------------------
+template <typename T, typename enable_if<is_same<T, uint16_t>::value>::type * = nullptr>
+inline T betoh(const T & v) {
+    return ::be16toh(v);
+}
+//------------------------------------------------------------------------------
+template <typename T, typename enable_if<is_same<T, uint32_t>::value>::type * = nullptr>
+inline T betoh(const T & v) {
+    return ::be32toh(v);
+}
+//------------------------------------------------------------------------------
+template <typename T, typename enable_if<is_same<T, uint64_t>::value>::type * = nullptr>
+inline T betoh(const T & v) {
+    return ::be64toh(v);
+}
+//------------------------------------------------------------------------------
+template <typename T, typename enable_if<is_same<T, uint16_t>::value>::type * = nullptr>
+inline T letoh(const T & v) {
+    return ::le16toh(v);
+}
+//------------------------------------------------------------------------------
+template <typename T, typename enable_if<is_same<T, uint32_t>::value>::type * = nullptr>
+inline T letoh(const T & v) {
+    return ::le32toh(v);
+}
+//------------------------------------------------------------------------------
+template <typename T, typename enable_if<is_same<T, uint64_t>::value>::type * = nullptr>
+inline T letoh(const T & v) {
+    return ::le64toh(v);
+}
+//------------------------------------------------------------------------------
 }
 //------------------------------------------------------------------------------
 namespace homeostas { namespace tests { void run_tests(); }}

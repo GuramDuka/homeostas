@@ -95,7 +95,11 @@ typedef class nn_integer_data {
         nn_integer_data(umaxword_t data)
             : ref_count_(1), length_(sizeof(data) / sizeof(data_[0])), dummy_(0) {
             for( size_t i = 0; i < sizeof(data) / sizeof(data_[0]); i++ ) {
+#if BYTE_ORDER == LITTLE_ENDIAN
                 data_[i] = (word) data;
+#elif BYTE_ORDER == BIG_ENDIAN
+                data_[i] = std::htole((word) data);
+#endif
                 data >>= sizeof(data_[0]) * CHAR_BIT;
             }
         }
@@ -165,11 +169,19 @@ typedef class nn_integer_data {
     }
 
 	sword isign() const {
-		return ((sword) data_[length_]) >> (sizeof(word) * CHAR_BIT - 1);
+#if BYTE_ORDER == LITTLE_ENDIAN
+        return ((sword) data_[length_]) >> (sizeof(word) * CHAR_BIT - 1);
+#elif BYTE_ORDER == BIG_ENDIAN
+        return ((sword) std::letoh(data_[length_])) >> (sizeof(word) * CHAR_BIT - 1);
+#endif
 	}
 
 	word high_word() const {
-		return data_[length_ - 1];
+#if BYTE_ORDER == LITTLE_ENDIAN
+        return data_[length_ - 1];
+#elif BYTE_ORDER == BIG_ENDIAN
+        return std::letoh(data_[length_ - 1]);
+#endif
 	}
 
 	void normalize() {
@@ -190,9 +202,15 @@ typedef class nn_integer_data {
 		word s1 = d1[p1->length_];
 
 		while( r < e ){
-			q = (dword) *d0++ + *d1++ + cf;
-			cf = (q >> sizeof(word) * CHAR_BIT) & 1;
-			*r++ = (word) q;
+#if BYTE_ORDER == LITTLE_ENDIAN
+            q = (dword) *d0++ + *d1++ + cf;
+            cf = (q >> sizeof(word) * CHAR_BIT) & 1;
+            *r++ = (word) q;
+#elif BYTE_ORDER == BIG_ENDIAN
+            q = (dword) std::letoh(*d0++) + std::letoh(*d1++) + cf;
+            cf = (q >> sizeof(word) * CHAR_BIT) & 1;
+            *r++ = std::htole((word) q);
+#endif
 		}
 
 		e = result->data_ + p1->length_;

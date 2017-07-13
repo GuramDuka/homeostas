@@ -113,7 +113,8 @@ struct PACKED packet {
     void generate_session_key() {
         cdc512 ctx(std::leave_uninitialized);
         ctx.generate_entropy_fast();
-        std::copy(std::begin(session_key), std::end(session_key), std::begin(ctx), std::end(ctx));
+        std::copy(std::begin(ctx), std::end(ctx),
+            std::begin(session_key), std::end(session_key));
     }
 
     void scramble() {
@@ -708,25 +709,28 @@ homeostas::basic_socket_istream<_Elem, _Traits> & operator >> (
 {
     const auto & delimiter = ss.delimiter();
     const auto b = delimiter.begin(), e = delimiter.end();
+    const auto d = distance(b, e);
 
-    getline(ss, s, _Elem(*b));
+    getline(ss, s, d == 0 ? _Traits::to_char_type('\0') : _Traits::to_char_type(*b));
 
-    auto i = b + 1;
+    if( d != 0 ) {
+        auto i = b + 1;
 
-    while( i != e && ss ) {
-        auto c = ss.get();
+        while( i != e && ss ) {
+            auto c = ss.get();
 
-        if( c == _Traits::eof() )
-            break;
+            if( c == _Traits::eof() )
+                break;
 
-        if( _Elem(c) != *i ) {
-            s.push_back(_Elem(c));
-            basic_string<_Elem, _Traits, _Alloc> t;
-            getline(ss, t, _Elem(*(i = b)));
-            s += t;
+            if( c != *i ) {
+                s.push_back(_Traits::to_char_type(c));
+                basic_string<_Elem, _Traits, _Alloc> t;
+                getline(ss, t, _Traits::to_char_type(*(i = b)));
+                s += t;
+            }
+
+            i++;
         }
-
-        i++;
     }
 
     return ss;
@@ -769,7 +773,8 @@ public:
 #if _MSC_VER
             , std::ios::binary
 #endif
-        )
+        ),
+        ends_({ 0 })
     {
         // http://en.cppreference.com/w/cpp/io/basic_ios/exceptions
         exceptions(std::ios::failbit | std::ios::badbit);

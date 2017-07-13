@@ -101,7 +101,6 @@ public:
     void srand(InputIt first, InputIt last) {
         auto b = std::begin(rc_.randrsl);
         auto e = std::end(rc_.randrsl);
-
         auto i = std::transform(first, last, b, e, [] (const auto & a) {
             return T(a);
         });

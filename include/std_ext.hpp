@@ -149,6 +149,9 @@ template <class InputIt, class OutputIt> inline
 OutputIt copy(InputIt first, InputIt last,
                    OutputIt d_first, OutputIt d_last)
 {
+    if( distance(first, last) <= distance(d_first, d_last) )
+        return copy(first, last, d_first);
+
     while( first != last && d_first != d_last )
         *d_first++ = (decltype(*d_first)) (*first++);
 
@@ -159,6 +162,9 @@ template <class InputIt, class OutputIt, class InserterIt> inline
 OutputIt copy(InputIt first, InputIt last,
                    OutputIt d_first, OutputIt d_last, InserterIt inserter)
 {
+    if( distance(first, last) <= distance(d_first, d_last) )
+        return copy(first, last, d_first);
+
     while( first != last && d_first != d_last )
         *d_first++ = (decltype(*d_first)) (*first++);
     while( first != last )
@@ -309,6 +315,11 @@ T stoint(InputIt first, InputIt last, int base = 10) {
     }
 
     return result;
+}
+//------------------------------------------------------------------------------
+template <typename InputIt> inline
+auto stobyte(InputIt first, InputIt last, int base = 10) {
+    return stoint<uint8_t>(first, last, base);
 }
 //------------------------------------------------------------------------------
 template <typename InputIt> inline
@@ -623,7 +634,7 @@ inline std::string to_string_ellapsed(uint64_t ns) {
     auto hours	= a / (60 * 60) - days * 24;
     auto mins	= a / 60 - days * 24 * 60 - hours * 60;
     auto secs	= a - days * 24 * 60 * 60 - hours * 60 * 60 - mins * 60;
-    std::ostringstream s;
+    ostringstream s;
 
     auto out = [&s] (uint64_t v, streamsize w = 2, char prefix = ':') {
         s << prefix << right << setfill('0') << setw(w) << v;
@@ -839,11 +850,28 @@ class key512 : public array<uint8_t, 64> {
 public:
     typedef array<uint8_t, 64> base;
 
-    static constexpr size_type ssize() noexcept { return 64; }
+    /*auto begin() const {
+        return base::begin();
+    }
+
+    auto begin() {
+        return base::begin();
+    }
+
+    auto end() const {
+        return base::end();
+    }
+
+    auto end() {
+        return base::end();
+    }*/
+
+    static constexpr size_type ssize() noexcept { return base().size(); }
 
     ~key512() {}
-    key512() : base() {}
-    key512(std::initializer_list<value_type> l) {
+    key512() {}
+
+    key512(const initializer_list<value_type> & l) {
         copy(l.begin(), l.end(), begin(), end());
     }
 
@@ -857,17 +885,17 @@ public:
     key512(key512 && o) : base(o) {}
 
     key512(const ptr_range<uint8_t> & range) {
-        std::copy(std::begin(range), std::end(range), begin(), end());
+        copy(range.begin(), range.end(), begin(), end());
     }
 
     template <size_t _Size>
     key512(const uint8_t (&o) [_Size]) {
-        std::copy(std::begin(o), std::end(o), begin(), end());
+        copy(std::begin(o), std::end(o), begin(), end());
     }
 
     template <size_t _Size>
     key512 & operator = (const uint8_t (&o) [_Size]) {
-        std::copy(std::begin(o), std::end(o), begin(), end());
+        copy(std::begin(o), std::end(o), begin(), end());
         return *this;
     }
 
@@ -879,6 +907,18 @@ public:
     key512 & operator = (key512 && o) {
         base::operator = (o);
         return *this;
+    }
+
+    bool operator == (const uint8_t (&o) [64]) const {
+        auto s = reinterpret_cast<const uint64_t *>(data());
+        auto d = reinterpret_cast<const uint64_t *>(o);
+        return s[0] == d[0] && s[1] == d[1] && s[2] == d[2] && s[3] == d[3] && s[4] == d[4] && s[5] == d[5] && s[6] == d[6] && s[7] == d[7];
+    }
+
+    bool operator != (const uint8_t (&o) [64]) const {
+        auto s = reinterpret_cast<const uint64_t *>(data());
+        auto d = reinterpret_cast<const uint64_t *>(o);
+        return s[0] != d[0] && s[1] != d[1] && s[2] != d[2] && s[3] != d[3] && s[4] != d[4] && s[5] != d[5] && s[6] != d[6] && s[7] != d[7];
     }
 
     bool operator == (const key512 & o) const {
@@ -917,24 +957,51 @@ public:
     }
 };
 //------------------------------------------------------------------------------
-inline string to_string(
-    const key512 & b,
-    const char * abc = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-    char delimiter = '-',
-    size_t interval = 9)
+#if (__GNUC__ > 0 && __GNUC__ < 5) || _MSC_VER
+template <typename T, typename M>
+constexpr const T uint_max(const T m, const M multiplier)
 {
-    string s;
-    size_t l = slen(abc), i = 0;
+    return m * multiplier > m ? uint_max<T>(m * multiplier, multiplier) : m;
+}
+#else
+template <typename T, typename M>
+constexpr const T uint_max(const T, const M multiplier)
+{
+    T m = 1u;
 
-    nn::integer a(b.data(), b.size()), d = l, mod;
+    for (;;) {
+        T n = T(m * multiplier);
+        if( n <= m ) // overflow
+            break;
+        m = n;
+    }
+
+    return m;
+}
+#endif
+inline string to_string(const key512 & b)
+{
+    constexpr const char * abc = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    constexpr const char delimiter = '-';
+    constexpr const size_t interval = 9;
+    string s;
+    size_t i = 0;
+    auto l = nn::word(slen(abc));
+    assert( l == 36 );
+    nn::integer a(b.data(), b.size()), d(uint_max<nn::word>(1, 36)), mod;
 
     while( a.is_notz() ) {
-        a = a.div(l, &mod);
-        s.push_back(abc[size_t(mod)]);
+        a = a.div(d, &mod);
+        auto m = nn::word(mod);
 
-        if( delimiter != '\0' && interval != 0 && ++i == interval ) {
-            s.push_back(delimiter);
-            i = 0;
+        while( m ) {
+            s.push_back(abc[m % l]);
+            m /= l;
+
+            if( delimiter != '\0' && interval != 0 && ++i == interval ) {
+                s.push_back(delimiter);
+                i = 0;
+            }
         }
     }
 
@@ -944,7 +1011,7 @@ inline string to_string(
     return s;
 }
 //---------------------------------------------------------------------------
-inline key512 stokey512(const std::string & s,
+inline key512 stokey512(const string & s,
     const char * abc = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 {
     size_t l = slen(abc);
@@ -974,13 +1041,41 @@ public:
     typedef typename base::const_pointer const_pointer;
     typedef typename base::allocator_type allocator_type;
 
-    blob() : base() {}
+    blob() {}
 
     blob(const blob & o) : base(o) {}
     blob(blob && o) : base(o) {}
 
+    blob(const initializer_list<value_type> & l) {
+        reserve(l.size());
+        copy(l.begin(), l.end(), back_inserter(*this));
+    }
+
+    template <typename T, typename
+        enable_if<container_traits<T>::is_array && std::is_same<typename T::value_type, value_type>::value>::type * = nullptr
+    >
+    blob(const T & a) {
+        reserve(a.size());
+        copy(a.begin(), a.end(), back_inserter(*this));
+    }
+
+    template <typename T, typename
+        enable_if<container_traits<T>::is_array && !std::is_same<typename T::value_type, value_type>::value>::type * = nullptr
+    >
+    blob(const T & a) {
+        reserve(a.size());
+        transform(a.begin(), a.end(), back_inserter(*this), [] (auto a) {
+            return value_type(a);
+        });
+    }
+
     template <class _Iter>
-    blob(_Iter _First, _Iter _Last) : base(_First, _Last) {}
+    blob(_Iter _First, _Iter _Last) {
+        reserve(distance(_First, _Last));
+        transform(_First, _Last, back_inserter(*this), [] (auto a) {
+            return value_type(a);
+        });
+    }
 
     blob & operator = (const blob & o) {
         base::operator = (o);
@@ -989,6 +1084,28 @@ public:
 
     blob & operator = (blob && o) {
         base::operator = (o);
+        return *this;
+    }
+
+    template <typename T, typename
+        enable_if<container_traits<T>::is_array && std::is_same<typename T::value_type, value_type>::value>::type * = nullptr
+    >
+    blob & operator = (const T & a) {
+        resize(0);
+        reserve(a.size());
+        copy(a.begin(), a.end(), back_inserter(*this));
+        return *this;
+    }
+
+    template <typename T, typename
+        enable_if<container_traits<T>::is_array && !std::is_same<typename T::value_type, value_type>::value>::type * = nullptr
+    >
+    blob & operator = (const T & a) {
+        resize(0);
+        reserve(a.size());
+        transform(a.begin(), a.end(), back_inserter(*this), [] (auto a) {
+            return value_type(a);
+        });
         return *this;
     }
 };
@@ -1003,9 +1120,31 @@ inline string to_string(const blob & b)
     s.setf(ios::hex | ios::uppercase);
 
     for( const auto & c : b )
-        s << /*setw(2) <<*/ uint16_t(c);
+        s << setw(2) << uint16_t(c);
 
     return s.str();
+}
+//---------------------------------------------------------------------------
+inline blob stoblob(const string & s)
+{
+    auto b = begin(s), e = end(s);
+    blob t;
+
+    while( b != e ) {
+        auto i = b;
+
+        while( i != e && distance(b, i) <= 2 )
+            i++;
+
+        if( distance(b, i) == 0 )
+            break;
+
+        t.push_back(blob::value_type(stobyte(b, i, 16)));
+
+        b = i;
+    }
+
+    return t;
 }
 //---------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////

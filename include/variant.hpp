@@ -60,7 +60,10 @@ public:
         Key512  = 6
     };
 
-    ~variant() {}
+    ~variant() {
+        clear();
+    }
+
     variant() : type_(Null) {}
 
     variant(const variant & o) : type_(Null) {
@@ -828,6 +831,12 @@ public:
         switch( type_ ) {
             case Null    :
                 break;
+            case Text    :
+#if __GNUG__
+                return stoblob(s_);
+#else
+                return stoblob(*reinterpret_cast<const string *>(placeholder_));
+#endif
             case Blob    :
 #if __GNUG__
                 return l_;
@@ -850,7 +859,13 @@ public:
         switch( type_ ) {
             case Null    :
                 break;
-            case Key512    :
+            case Text    :
+#if __GNUG__
+                return stokey512(s_);
+#else
+                return stokey512(*reinterpret_cast<const string *>(placeholder_));
+#endif
+            case Key512  :
 #if __GNUG__
                 return k_;
 #else

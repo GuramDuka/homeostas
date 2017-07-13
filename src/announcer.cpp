@@ -49,6 +49,7 @@ void announcer::worker()
             //std::qerr << socket_->remote_addr() << std::endl;
 
             socket_stream ss(socket_);
+            ss.noends();
 
             ss <<
             "GET /announcer.php HTTP/1.1\r\n"

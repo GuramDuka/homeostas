@@ -29,6 +29,7 @@
 #include <iomanip>
 //------------------------------------------------------------------------------
 #include "numeric/ii.hpp"
+#include "std_ext.hpp"
 #include "cdc512.hpp"
 #include "rand.hpp"
 #include "port.hpp"
@@ -37,7 +38,7 @@ namespace homeostas {
 //------------------------------------------------------------------------------
 cdc512 & cdc512::init()
 {
-    auto d = reinterpret_cast<uint64_t *>(this);
+    auto d = reinterpret_cast<uint64_t *>(data());
 
     d[0] = htole64(0x46F87CB1B3EB6319ull);
     d[1] = htole64(0x7D7E68848EA8773Aull);
@@ -57,17 +58,17 @@ cdc512 & cdc512::update(const void * data, uintptr_t size)
 {
 	p += size;
 
-    while( size >= sizeof(key512) ){
-        shuffle(*reinterpret_cast<const key512 *>(data));
-        data = (const uint8_t *) data + sizeof(key512);
-        size -= sizeof(key512);
+    while( size >= sizeof(std::shuffler512) ) {
+        shuffle(*reinterpret_cast<const std::shuffler512 *>(data));
+        data = (const uint8_t *) data + sizeof(std::shuffler512);
+        size -= sizeof(std::shuffler512);
 	}
 
 	if( size > 0 ) {
-        key512 pad;
+        std::shuffler512 pad;
 		
-        memcpy(pad.data(), data, size);
-        memset(pad.data() + size, 0, pad.size() - size);
+        memcpy(&pad, data, size);
+        memset(reinterpret_cast<uint8_t *>(&pad) + size, 0, sizeof(pad) - size);
 
 		shuffle(pad);
 	}
@@ -89,7 +90,8 @@ cdc512 & cdc512::final()
         pad.g = p << 6;
         pad.h = p << 7;
 
-        pad.shuffle(*reinterpret_cast<std::shuffler512 *>(this));
+        pad.shuffle(pad);
+        pad.shuffle(*reinterpret_cast<std::shuffler512 *>(data()));
         shuffle(pad);
     }
 
@@ -173,22 +175,30 @@ void cdc512::from_short_string(const std::string & s, const char * abc)
 cdc512 & cdc512::generate_entropy_fast()
 {
     auto f = std::bind(&cdc512::generate_entropy_fast, this);
-    struct {
-        uint64_t ts = clock_gettime_ns();
-        void * p0;
-        uintptr_t p1;
-        void * p2;
-        uintptr_t p3;
-        uint8_t ff[sizeof(f)];
+    union {
+        struct {
+            uint64_t ts;
+            void * p0;
+            uintptr_t p1;
+            void * p2;
+            uintptr_t p3;
+            uint8_t ff[sizeof(f)];
+        };
+        uint64_t g[16]; // some garbage on stack
     } a;
 
+    a.ts = clock_gettime_ns();
     memcpy(&a.ff, &f, sizeof(f));
     a.p0 = &a;
-    a.p1 = uintptr_t(&a) ^ uintptr_t(a.ts);
-    a.p2 = this;
+    a.p1 = std::rhash(uintptr_t(&a)) ^ uintptr_t(&a) ^ uintptr_t(a.ts);
+    a.p2 = (void *) std::rhash(a.p1);
     a.p3 = uintptr_t(a.ts) ^ uintptr_t(a.p0);
 
-    init();
+    a.g[9] = std::rhash(a.g[3] >> 5) ^ (a.ts << 3);
+    a.g[14] = clock_gettime_ns() ^ std::rhash(a.ts >> 5) ^ (a.ts << 3);
+    a.g[15] = std::rhash(a.g[8]) ^ (a.ts << 17);
+
+    //init();
     update(&a, sizeof(a));
     final();
 

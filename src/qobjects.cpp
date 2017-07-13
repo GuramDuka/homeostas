@@ -93,9 +93,9 @@ void Homeostas::startServer()
 
     server_ = std::make_unique<homeostas::server>();
     server_->host_public_key(
-        homeostas::configuration::instance()->get("host.public_key").to_key512());
+        homeostas::configuration::instance()->get("host.public_key"));
     server_->host_private_key(
-        homeostas::configuration::instance()->get("host.private_key").to_key512());
+        homeostas::configuration::instance()->get("host.private_key"));
     server_->startup();
 }
 //------------------------------------------------------------------------------
@@ -116,6 +116,7 @@ void Homeostas::startClient()
 
     client_ = std::make_unique<homeostas::client>();
     client_->server_public_key(homeostas::configuration::instance()->get("host.public_key"));
+    client_->client_public_key(client_->server_public_key());
     client_->startup();
 }
 //------------------------------------------------------------------------------
@@ -133,14 +134,16 @@ void Homeostas::loadTrackers()
     auto config = homeostas::configuration::instance();
 
     if( !config->exists("host.private_key") ) {
-        auto key = std::stokey512(Homeostas::instance()->newUniqueId().toStdString());
+        auto skey = Homeostas::instance()->newUniqueId().toStdString();
+        auto key = std::stokey512(skey);
         config->set("host.private_key", key);
     }
 
     if( !config->exists("host.public_key") ) {
-        auto key = std::stokey512(Homeostas::instance()->newUniqueId().toStdString());
-        config->set("host.public_key", key);
+        auto skey = Homeostas::instance()->newUniqueId().toStdString();
+        config->set("host.public_key", skey);
         at_scope_exit( homeostas::discoverer::instance()->detach_db() );
+        auto key = std::stokey512(skey);
         auto local_p2p_key = std::stokey512(Homeostas::instance()->newUniqueId().toStdString());
         homeostas::discoverer::instance()->announce_host(key, nullptr, &local_p2p_key);
     }

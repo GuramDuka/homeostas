@@ -2278,8 +2278,8 @@ public:
 
         while( !interrupt_ ) {
             select_rd();
-            socklen_t as = remote_addr_.size();
-            SOCKET socket = ::accept(socket_, (sockaddr *) remote_addr_.data(), &as);
+            auto as = socklen_t(sizeof(remote_addr_));
+            SOCKET socket = ::accept(socket_, (sockaddr *) &remote_addr_, &as);
 
             if( socket != INVALID_SOCKET ) {
                 client_socket->socket_          = socket;
@@ -2287,9 +2287,9 @@ public:
                 client_socket->socket_domain_   = socket_domain_;
                 client_socket->socket_type_     = socket_type_;
 
-                as = sizeof(remote_addr_);
+                as = socklen_t(sizeof(client_socket->remote_addr_));
                 getpeername(socket, (sockaddr *) &client_socket->remote_addr_, &as);
-                as = sizeof(local_addr_);
+                as = socklen_t(sizeof(client_socket->local_addr_));
                 getsockname(socket, (sockaddr *) &client_socket->local_addr_, &as);
                 break;
             }

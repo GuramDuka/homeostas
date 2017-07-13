@@ -157,11 +157,6 @@ void natpmp::worker()
         return false;
     };
 
-    auto wait = [&] (const std::chrono::seconds & s) {
-        std::unique_lock<std::mutex> lock(mtx_);
-        cv_.wait_for(lock, s, [&] { return shutdown_; });
-    };
-
     socket_addr gateway_mask, last_gateway, gate;
     gateway_mask.clear();
     gate.family(AF_INET);

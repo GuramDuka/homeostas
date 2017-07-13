@@ -42,8 +42,8 @@ struct light_cipher : protected cdc512 {
     light_cipher() : cdc512(std::leave_uninitialized) {}
 
     void init(const std::key512 & key) {
-        cdc512::operator =(key);
-        mask_ring = std::end(mask);
+        cdc512::operator = (key);
+        mask_ring = end();
     }
 
     template <typename InpIt, typename OutIt>
@@ -51,13 +51,12 @@ struct light_cipher : protected cdc512 {
         assert( std::distance(first, last) == std::distance(d_first, d_last) );
 
         std::transform(first, last, d_first, d_last, [&] (const auto & a) {
-            if( mask_ring == std::end(mask) ) {
-                mask = *this;
+            if( mask_ring == this->end() ) {
                 this->update(this->begin(), this->end());
-                mask_ring = std::begin(mask);
+                mask_ring = this->begin();
             }
 
-            return (typename OutIt::value_type) (a ^ *mask_ring++);
+            return (typename OutIt::value_type) (a) ^ (typename OutIt::value_type) (*mask_ring++);
         });
     }
 
@@ -66,8 +65,7 @@ struct light_cipher : protected cdc512 {
         encode(std::begin(s_range), std::end(s_range), std::begin(d_range), std::end(d_range));
     }
 
-    std::key512 mask;
-    decltype(std::begin(mask)) mask_ring;
+    iterator mask_ring;
 };
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
@@ -96,7 +94,7 @@ struct strong_cipher : protected rand<7, uint64_t> {
                 mask_ring = std::begin(mask);
             }
 
-            return (typename OutIt::value_type) (a ^ *mask_ring++);
+            return (typename OutIt::value_type) (a) ^ (typename OutIt::value_type) (*mask_ring++);
         });
     }
 

@@ -57,7 +57,7 @@ void client::shutdown()
 void client::worker()
 {
     socket_stream ss;
-    std::key512 p2p_key;
+    std::key512 p2p_key(std::leave_uninitialized);
 
     ss.handshake_functor([&] (
         handshake::packet * req,
@@ -68,28 +68,40 @@ void client::worker()
 
         if( res == nullptr ) {
             // setup request before send to server
-            if( server_public_key_ != req->public_key ) {
+            std::copy(std::begin(client_public_key_), std::end(client_public_key_),
+                std::begin(req->public_key), std::end(req->public_key));
+
+            // client fingerprint based on p2p key and server public key
+            cdc512 fingerprint(p2p_key.begin(), p2p_key.end(),
+                server_public_key_.begin(), server_public_key_.end());
+
+            std::copy(std::begin(fingerprint), std::end(fingerprint),
+                std::begin(req->fingerprint), std::end(req->fingerprint));
+
+#if QT_CORE_LIB
+            qDebug().noquote().nospace() << "client p2p key: " <<
+                QString::fromStdString(std::to_string(p2p_key));
+            qDebug().noquote().nospace() << "client fingerprint: " <<
+                QString::fromStdString(std::to_string(fingerprint));
+#endif
+
+        }
+        else if( p_local_transport_key == nullptr && p_remote_transport_key == nullptr ) {
+            if( server_public_key_ != res->public_key ) {
                 req->error = handshake::ErrorInvalidHostPublicKey;
             }
             else {
-                // client fingerprint based on p2p key and server public key
-                std::key512 fingerprint = cdc512(std::begin(p2p_key), std::end(p2p_key),
-                    std::begin(server_public_key_), std::end(server_public_key_));
-                std::copy(std::begin(fingerprint), std::end(fingerprint),
-                    std::begin(req->fingerprint), std::end(req->fingerprint));
-            }
-        }
-        else if( p_local_transport_key == nullptr && p_remote_transport_key == nullptr ) {
-            // server fingerprint based on p2p key and client fingerprint
-            std::key512 fingerprint = cdc512(std::begin(p2p_key), std::end(p2p_key),
-                std::begin(req->fingerprint), std::end(req->fingerprint));
+                // server fingerprint based on p2p key and client public key
+                cdc512 fingerprint(std::begin(p2p_key), std::end(p2p_key),
+                    std::begin(client_public_key_), std::end(client_public_key_));
 
-            if( fingerprint == res->fingerprint ) {
-                // approved server fingerprint
-                req->error = handshake::ErrorNone;
-            }
-            else {
-                req->error = handshake::ErrorInvalidFingerprint;
+                if( fingerprint == res->fingerprint ) {
+                    // approved server fingerprint
+                    req->error = handshake::ErrorNone;
+                }
+                else {
+                    req->error = handshake::ErrorInvalidFingerprint;
+                }
             }
         }
         else {
@@ -120,23 +132,26 @@ void client::worker()
             auto addrs = d.discover_host(server_public_key_, &p2p_key);
 
             while( !shutdown_ && !addrs.empty() ) {
-                auto addr = std::find_if(std::rbegin(addrs), std::rend(addrs), [] (const auto & a) {
+                auto e = std::rend(addrs), addr = std::find_if(std::rbegin(addrs), e, [] (const auto & a) {
                     return a.is_loopback();
                 });
 
-                if( addr == std::rend(addrs) )
+                if( addr == e )
                     addr = std::rbegin(addrs);
 
-            if( addr != std::rend(addrs) ) {
-                socket_->connect(*addr);
-                addrs.erase(addr);
+                if( addr != e ) {
+                    socket_->exceptions(false);
+                    socket_->connect(*addr);
+                    socket_->exceptions(true);
+                    addrs.erase(addr.base() - 1);
 
-                if( *socket_ ) {
-                    ss.reset(socket_);
+                    if( *socket_ ) {
+                        ss.reset(socket_);
 
-                    ss << "Hello" << std::flush;
-                    std::string s;
-                    ss >> s;
+                        ss << "Hello" << std::flush;
+                        std::string s;
+                        ss >> s;
+                    }
                 }
             }
         }
@@ -144,12 +159,6 @@ void client::worker()
             std::cerr << e << std::endl;
 #if QT_CORE_LIB
             qDebug().noquote().nospace() << QString::fromStdString(e.what());
-#endif
-        }
-        catch( ... ) {
-            std::cerr << "undefined c++ exception catched" << std::endl;
-#if QT_CORE_LIB
-            qDebug().noquote().nospace() << "undefined c++ exception catched";
 #endif
         }
         wait(std::chrono::seconds(60));

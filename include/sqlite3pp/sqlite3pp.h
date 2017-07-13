@@ -895,8 +895,8 @@ namespace sqlite3pp {
                 auto range = std::make_range(static_cast<const value_type *>(sqlite3_column_blob(cmd_->stmt_, idx)),
                     sqlite3_column_bytes(cmd_->stmt_, idx) / sizeof(value_type));
                 T result({}); // by default array zero initialized
-                auto i = std::copy(range, std::begin(result), std::end(result));
-                std::fill(i, std::end(result), value_type(0));
+                auto i = std::copy(range.begin(), range.end(), result.begin());
+                std::fill(i, result.end(), value_type());
                 return result;
             }
 

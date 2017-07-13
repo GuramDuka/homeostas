@@ -219,45 +219,82 @@ struct integer {
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 struct cdc512 : public std::key512 {
+    typedef std::key512 base;
+
+    /*auto begin() const {
+        return base::begin();
+    }
+
+    auto begin() {
+        return base::begin();
+    }
+
+    auto end() const {
+        return base::end();
+    }
+
+    auto end() {
+        return base::end();
+    }*/
+
     uint64_t p;
 
-    cdc512() : std::key512(std::leave_uninitialized) {
-        init();
-    }
-    
+    cdc512() : std::key512(std::leave_uninitialized) {}
     cdc512(std::leave_uninitialized_type t) : std::key512(t) {}
     cdc512(std::zero_initialized_type t) : std::key512(t) {}
 
-    cdc512(const std::key512 & o) : std::key512(o) {}
+    cdc512(const std::key512 & o) : std::key512(o), p(0) {}
 
     cdc512 & operator = (const std::key512 & o) {
         std::key512::operator = (o);
         return *this;
     }
 
+    cdc512(const cdc512 & o) : std::key512(o), p(o.p) {}
+
+    cdc512 & operator = (const cdc512 & o) {
+        std::key512::operator = (o);
+        p = o.p;
+        return *this;
+    }
+
     template <class InitIt, class InputIt>
-    cdc512(InitIt i_first, InitIt i_last, InputIt first, InputIt last) {
+    cdc512(InitIt i_first, InitIt i_last, InputIt first, InputIt last) : std::key512(std::leave_uninitialized) {
         init(i_first, i_last);
         update(first, last);
         final();
     }
 
     template <class InputIt>
-    cdc512(InputIt first, InputIt last) {
+    cdc512(InputIt first, InputIt last) : std::key512(std::leave_uninitialized) {
         init();
         update(first, last);
         final();
     }
 
-    template <typename InputIt>
+    template <typename InputIt, typename
+        std::enable_if<std::is_same<typename InputIt::value_type, value_type>::value>::type * = nullptr
+    >
     auto & init(InputIt first, InputIt last) {
-        std::copy(first, last, std::begin(*this), std::end(*this));
+        std::copy(first, last, begin(), end());
+        p = 0;
+        return *this;
+    }
+
+    template <typename InputIt, typename
+        std::enable_if<!std::is_same<typename InputIt::value_type, value_type>::value>::type * = nullptr
+    >
+    auto & init(InputIt first, InputIt last) {
+        std::transform(first, last, begin(), end(), [] (const auto & a) {
+            return value_type(a);
+        });
+        p = 0;
         return *this;
     }
 
     template <typename InputIt>
     auto & update(InputIt first, InputIt last) {
-        return update(&(*first), std::distance(first, last) * sizeof(*first));
+        return update(&*first, (last - first) * sizeof(*first));
     }
 
     cdc512 & init();

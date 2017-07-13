@@ -179,6 +179,14 @@ discoverer & discoverer::announce_host(
     auto i = st_sel_peer_->begin();
 
     if( i ) {
+        std::key512 p2p_key(std::leave_uninitialized);
+
+        // save existing p2p key
+        if( p_p2p_key == nullptr ) {
+            p2p_key = i->get<std::key512>("p2p_key");
+            p_p2p_key = &p2p_key;
+        }
+
         st_sel_peer_->reset();
         bind(st_upd_peer_);
     }

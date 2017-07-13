@@ -236,12 +236,6 @@ void server::control()
             qDebug().noquote().nospace() << QString::fromStdString(e.what());
 #endif
         }
-        catch( ... ) {
-            std::cerr << "undefined c++ exception catched" << std::endl;
-#if QT_CORE_LIB
-            qDebug().noquote().nospace() << "undefined c++ exception catched";
-#endif
-        }
 
         wait(std::chrono::seconds(60));
     }
@@ -250,7 +244,8 @@ void server::control()
 void server::worker(std::shared_ptr<active_socket> socket)
 {
     socket_stream ss(socket);
-    std::key512 peer_pubic_key, peer_p2p_key;
+    std::key512 peer_pubic_key(std::leave_uninitialized);
+    std::key512 p2p_key(std::leave_uninitialized);
 
     ss.handshake_functor([&] (
         handshake::packet * req,
@@ -259,15 +254,30 @@ void server::worker(std::shared_ptr<active_socket> socket)
         std::key512 * p_remote_transport_key) {
         assert( req != nullptr );
 
-        if( res != nullptr ) {
+        if( p_local_transport_key != nullptr && p_remote_transport_key != nullptr ) {
+            // client approved
+            *p_local_transport_key = cdc512(std::begin(p2p_key), std::end(p2p_key),
+                std::begin(res->session_key), std::end(res->session_key));
+            *p_remote_transport_key = cdc512(std::begin(p2p_key), std::end(p2p_key),
+                std::begin(req->session_key), std::end(req->session_key));
+        }
+        else if( res != nullptr ) {
             // client request received
-            discoverer d;
             peer_pubic_key = req->public_key;
-            peer_p2p_key = d.discover_host_p2p_key(peer_pubic_key);
+
+            discoverer d;
+            p2p_key = d.discover_host_p2p_key(peer_pubic_key);
 
             // client fingerprint based on p2p key and server public key
-            std::key512 fingerprint = cdc512(std::begin(peer_p2p_key), std::end(peer_p2p_key),
-                std::begin(host_public_key_), std::end(host_public_key_));
+            cdc512 fingerprint(p2p_key.begin(), p2p_key.end(),
+                host_public_key_.begin(), host_public_key_.end());
+
+#if QT_CORE_LIB
+            qDebug().noquote().nospace() << "server p2p key: " <<
+                QString::fromStdString(std::to_string(p2p_key));
+            qDebug().noquote().nospace() << "server fingerprint: " <<
+                QString::fromStdString(std::to_string(fingerprint));
+#endif
 
             if( fingerprint == req->fingerprint ) {
                 // approved client fingerprint
@@ -276,22 +286,15 @@ void server::worker(std::shared_ptr<active_socket> socket)
                 std::copy(std::begin(host_public_key_), std::end(host_public_key_),
                     std::begin(res->public_key), std::end(res->public_key));
 
-                cdc512 fingerprint(std::begin(peer_p2p_key), std::end(peer_p2p_key),
-                    std::begin(req->fingerprint), std::end(req->fingerprint));
+                // server fingerprint based on p2p key and client public key
+                cdc512 fingerprint(std::begin(p2p_key), std::end(p2p_key),
+                    std::begin(peer_pubic_key), std::end(peer_pubic_key));
                 std::copy(std::begin(fingerprint), std::end(fingerprint),
                     std::begin(res->fingerprint), std::end(res->fingerprint));
             }
             else {
                 res->error = handshake::ErrorInvalidFingerprint;
             }
-        }
-
-        if( p_local_transport_key != nullptr && p_remote_transport_key != nullptr ) {
-            // client approved my fingerprint
-            *p_local_transport_key = cdc512(std::begin(peer_p2p_key), std::end(peer_p2p_key),
-                std::begin(res->session_key), std::end(res->session_key));
-            *p_remote_transport_key = cdc512(std::begin(peer_p2p_key), std::end(peer_p2p_key),
-                std::begin(req->session_key), std::end(req->session_key));
         }
     });
 
@@ -320,18 +323,7 @@ void server::worker(std::shared_ptr<active_socket> socket)
 #if QT_CORE_LIB
             qDebug().noquote().nospace() << QString::fromStdString(e.what());
 #endif
-        }
-        catch( const std::exception & e ) {
-            std::cerr << e << std::endl;
-#if QT_CORE_LIB
-            qDebug().noquote().nospace() << QString::fromStdString(e.what());
-#endif
-        }
-        catch( ... ) {
-            std::cerr << "undefined c++ exception catched" << std::endl;
-#if QT_CORE_LIB
-            qDebug().noquote().nospace() << "undefined c++ exception catched";
-#endif
+            break;
         }
     }
 }
