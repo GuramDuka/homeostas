@@ -151,6 +151,12 @@ struct socket_addr {
         memcpy(&storage.ss_family, ai.ai_addr, std::min(sizeof(storage), size_t(ai.ai_addrlen)));
     }
 
+    socket_addr(const sockaddr & sa) noexcept {
+        size_t sl = sa.sa_family == AF_INET ? sizeof(saddr4) :
+            sa.sa_family == AF_INET6 ? sizeof(saddr6) : 0;
+        memcpy(&storage, &sa, std::min(sizeof(storage), size_t(sl)));
+    }
+
     socket_addr(const sockaddr * sa, socklen_t sl) noexcept {
         memcpy(&storage, sa, std::min(sizeof(storage), size_t(sl)));
     }
@@ -178,6 +184,13 @@ struct socket_addr {
     socket_addr & operator = (const socket_addr & o) noexcept {
         if( this != &o )
             memcpy(this, &o, sizeof(o));
+        return *this;
+    }
+
+    socket_addr & operator = (const sockaddr & sa) noexcept {
+        size_t sl = sa.sa_family == AF_INET ? sizeof(saddr4) :
+            sa.sa_family == AF_INET6 ? sizeof(saddr6) : 0;
+        memcpy(&storage, &sa, std::min(sizeof(storage), size_t(sl)));
         return *this;
     }
 

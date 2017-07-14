@@ -135,8 +135,7 @@ void Homeostas::loadTrackers()
 
     if( !config->exists("host.private_key") ) {
         auto skey = Homeostas::instance()->newUniqueId().toStdString();
-        auto key = std::stokey512(skey);
-        config->set("host.private_key", key);
+        config->set("host.private_key", skey);
     }
 
     if( !config->exists("host.public_key") ) {

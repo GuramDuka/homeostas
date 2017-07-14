@@ -411,97 +411,52 @@ namespace sqlite3pp {
             return rc_;
         }
 
-        int bind(int idx, bool value) {
-            rc_ = sqlite3_bind_int(stmt_, idx, value ? 1 : 0);
+        template <typename T,
+            typename std::enable_if<
+                std::is_integral<T>::value
+            >::type * = nullptr
+        >
+        int bind(int idx, const T & value) {
+            rc_ = sqlite3_bind_int64(stmt_, idx, int64_t(value));
             if (rc_ == SQLITE_MISUSE) {
                 sqlite3_reset(stmt_);
-                rc_ = sqlite3_bind_int(stmt_, idx, value ? 1 : 0);
-            }
-            if (rc_ != SQLITE_OK)
-                db_.throw_database_error();
-            return rc_;
-        }
-        
-        int bind(int idx, int value) {
-            rc_ = sqlite3_bind_int(stmt_, idx, value);
-            if (rc_ == SQLITE_MISUSE) {
-                sqlite3_reset(stmt_);
-                rc_ = sqlite3_bind_int(stmt_, idx, value);
+                rc_ = sqlite3_bind_int64(stmt_, idx, int64_t(value));
             }
             if (rc_ != SQLITE_OK)
                 db_.throw_database_error();
             return rc_;
         }
 
-        int bind(int idx, unsigned value) {
-            rc_ = sqlite3_bind_int(stmt_, idx, value);
+        template <typename T,
+            typename std::enable_if<
+                std::is_floating_point<T>::value
+            >::type * = nullptr
+        >
+        int bind(int idx, const T & value) {
+            rc_ = sqlite3_bind_double(stmt_, idx, double(value));
             if (rc_ == SQLITE_MISUSE) {
                 sqlite3_reset(stmt_);
-                rc_ = sqlite3_bind_int(stmt_, idx, value);
-            }
-            if (rc_ != SQLITE_OK)
-                db_.throw_database_error();
-            return rc_;
-        }
-        
-        int bind(int idx, double value) {
-            rc_ = sqlite3_bind_double(stmt_, idx, value);
-            if (rc_ == SQLITE_MISUSE) {
-                sqlite3_reset(stmt_);
-                rc_ = sqlite3_bind_double(stmt_, idx, value);
+                rc_ = sqlite3_bind_double(stmt_, idx, double(value));
             }
             if (rc_ != SQLITE_OK)
                 db_.throw_database_error();
             return rc_;
         }
 
-        int bind(int idx, long long int value) {
-            rc_ = sqlite3_bind_int64(stmt_, idx, value);
+        template <typename std::size_t _Sz>
+        int bind(int idx, const char (&value) [_Sz], copy_semantic fcopy) {
+            auto l = std::slen(value);
+            rc_ = sqlite3_bind_text64(stmt_, idx, value, l, fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC, SQLITE_UTF8);
             if (rc_ == SQLITE_MISUSE) {
                 sqlite3_reset(stmt_);
-                rc_ = sqlite3_bind_int64(stmt_, idx, value);
+                rc_ = sqlite3_bind_text64(stmt_, idx, value, l, fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC, SQLITE_UTF8);
             }
             if (rc_ != SQLITE_OK)
                 db_.throw_database_error();
             return rc_;
         }
 
-        int bind(int idx, long long unsigned value) {
-            rc_ = sqlite3_bind_int64(stmt_, idx, value);
-            if (rc_ == SQLITE_MISUSE) {
-                sqlite3_reset(stmt_);
-                rc_ = sqlite3_bind_int64(stmt_, idx, value);
-            }
-            if (rc_ != SQLITE_OK)
-                db_.throw_database_error();
-            return rc_;
-        }
-
-#if __clang__ || __GNUG__ >= 7
-        int bind(int idx, int64_t value) {
-            rc_ = sqlite3_bind_int64(stmt_, idx, value);
-            if (rc_ == SQLITE_MISUSE) {
-                sqlite3_reset(stmt_);
-                rc_ = sqlite3_bind_int64(stmt_, idx, value);
-            }
-            if (rc_ != SQLITE_OK)
-                db_.throw_database_error();
-            return rc_;
-        }
-
-        int bind(int idx, uint64_t value) {
-            rc_ = sqlite3_bind_int64(stmt_, idx, value);
-            if (rc_ == SQLITE_MISUSE) {
-                sqlite3_reset(stmt_);
-                rc_ = sqlite3_bind_int64(stmt_, idx, value);
-            }
-            if (rc_ != SQLITE_OK)
-                db_.throw_database_error();
-            return rc_;
-        }
-#endif
-
-        int bind(int idx, char const* value, copy_semantic fcopy) {
+        int bind(int idx, const char * value, copy_semantic fcopy) {
             auto l = std::slen(value);
             rc_ = sqlite3_bind_text64(stmt_, idx, value, l, fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC, SQLITE_UTF8);
             if (rc_ == SQLITE_MISUSE) {
@@ -525,7 +480,7 @@ namespace sqlite3pp {
             return rc_;
         }
 
-        int bind(int idx, void const* value, size_t n, copy_semantic fcopy) {
+        int bind(int idx, const void * value, size_t n, copy_semantic fcopy) {
             rc_ = sqlite3_bind_blob64(stmt_, idx, value, n, fcopy == copy ? SQLITE_TRANSIENT : SQLITE_STATIC);
             if (rc_ == SQLITE_MISUSE) {
                 sqlite3_reset(stmt_);
@@ -557,76 +512,100 @@ namespace sqlite3pp {
             return i->second;
         }
 
+        int param_name2idx(const char * name) const {
+            auto i = param_cache_.find(name);
+
+            if( i == param_cache_.cend() )
+                throw database_error("Invalid parameter name");
+
+            return i->second;
+        }
+
         int param_name2idx(const std::string & name) const {
-            return param_name2idx(name.c_str());
+            auto i = param_cache_.find(name.c_str());
+
+            if( i == param_cache_.cend() )
+                throw database_error("Invalid parameter name");
+
+            return i->second;
+        }
+
+        template <typename T, std::size_t _Sz,
+            typename std::enable_if<
+                std::is_integral<T>::value || std::is_floating_point<T>::value
+            >::type * = nullptr
+        >
+        int bind(const char (&name) [_Sz], const T & value) {
+            auto idx = param_name2idx(name);
+            if( &value == nullptr )
+                return bind(idx, nullptr);
+            return bind<T>(idx, value);
+        }
+
+        template <typename T, std::size_t _Sz,
+            typename std::enable_if<
+                std::is_integral<T>::value || std::is_floating_point<T>::value
+            >::type * = nullptr
+        >
+        int bind(const std::string & name, const T & value) {
+            auto idx = param_name2idx(name);
+            if( &value == nullptr )
+                return bind(idx, nullptr);
+            return bind<T>(idx, value);
         }
 
         template <std::size_t _Sz>
-        int bind(const char (&name) [_Sz], bool value) {
-            //auto idx = sqlite3_bind_parameter_index(stmt_, name);
-            return bind(param_name2idx(name), value);
+        int bind(const char (&name) [_Sz], const void * value, int n, copy_semantic fcopy) {
+            auto idx = param_name2idx(name);
+            if( value == nullptr )
+                return bind(idx, nullptr);
+            return bind(idx, value, n, fcopy);
         }
-        
-        template <std::size_t _Sz>
-        int bind(const char (&name) [_Sz], int value) {
-            //auto idx = sqlite3_bind_parameter_index(stmt_, name);
-            return bind(param_name2idx(name), value);
+
+        int bind(const std::string & name, const void * value, int n, copy_semantic fcopy) {
+            auto idx = param_name2idx(name);
+            if( value == nullptr )
+                return bind(idx, nullptr);
+            return bind(idx, value, n, fcopy);
+        }
+
+        template <std::size_t _Sz, std::size_t _VSz>
+        int bind(const char (&name) [_Sz], const char (&value) [_VSz], copy_semantic fcopy) {
+            auto idx = param_name2idx(name);
+            if( &value == nullptr )
+                return bind(idx, nullptr);
+            return bind(idx, value, fcopy);
         }
 
         template <std::size_t _Sz>
-        int bind(const char (&name) [_Sz], unsigned value) {
-            //auto idx = sqlite3_bind_parameter_index(stmt_, name);
-            return bind(param_name2idx(name), value);
-        }
-        
-        template <std::size_t _Sz>
-        int bind(const char (&name) [_Sz], double value) {
-            //auto idx = sqlite3_bind_parameter_index(stmt_, name);
-            return bind(param_name2idx(name), value);
+        int bind(const char (&name) [_Sz], const char * value, copy_semantic fcopy) {
+            auto idx = param_name2idx(name);
+            if( value == nullptr )
+                return bind(idx, nullptr);
+            return bind(idx, value, fcopy);
         }
 
         template <std::size_t _Sz>
-        int bind(const char (&name) [_Sz], long long int value) {
-            //auto idx = sqlite3_bind_parameter_index(stmt_, name);
-            return bind(param_name2idx(name), value);
+        int bind(const char (&name) [_Sz], const std::string & value, copy_semantic fcopy) {
+            auto idx = param_name2idx(name);
+            if( &value == nullptr )
+                return bind(idx, nullptr);
+            return bind(idx, value, fcopy);
         }
 
         template <std::size_t _Sz>
-        int bind(const char (&name) [_Sz], long long unsigned value) {
-            //auto idx = sqlite3_bind_parameter_index(stmt_, name);
-            return bind(param_name2idx(name), value);
+        int bind(const std::string & name, const char (&value) [_Sz], copy_semantic fcopy) {
+            auto idx = param_name2idx(name);
+            if( &value == nullptr )
+                return bind(idx, nullptr);
+            return bind(idx, value, fcopy);
         }
 
-#if __clang__ || __GNUG__ >= 7
-        template <std::size_t _Sz>
-        int bind(const char (&name) [_Sz], int64_t value) {
-            //auto idx = sqlite3_bind_parameter_index(stmt_, name);
-            return bind(param_name2idx(name), value);
-        }
-
-        template <std::size_t _Sz>
-        int bind(const char (&name) [_Sz], uint64_t value) {
-            //auto idx = sqlite3_bind_parameter_index(stmt_, name);
-            return bind(param_name2idx(name), value);
-        }
-#endif
-
-        template <std::size_t _Sz>
-        int bind(const char (&name) [_Sz], char const* value, copy_semantic fcopy) {
-            //auto idx = sqlite3_bind_parameter_index(stmt_, name);
-            return bind(param_name2idx(name), value, fcopy);
-        }
-
-        template <std::size_t _Sz>
-        int bind(const char (&name) [_Sz], void const* value, int n, copy_semantic fcopy) {
-            //auto idx = sqlite3_bind_parameter_index(stmt_, name);
-            return bind(param_name2idx(name), value, n, fcopy);
-        }
-
-        template <std::size_t _Sz>
-        int bind(const char (&name) [_Sz], std::string const& value, copy_semantic fcopy) {
-            //auto idx = sqlite3_bind_parameter_index(stmt_, name);
-            return bind(param_name2idx(name), value, fcopy);
+        int bind(const std::string & name, const std::string & value, copy_semantic fcopy) {
+            auto idx = param_name2idx(name);
+            if( &value == nullptr )
+                return bind(idx, nullptr);
+            return bind(idx, value, fcopy);
         }
 
         template <std::size_t _Sz>
@@ -635,25 +614,27 @@ namespace sqlite3pp {
         }
 
         int bind(const std::string & name, std::nullptr_t) {
-            return bind(param_name2idx(name.c_str()), nullptr);
+            return bind(param_name2idx(name), nullptr);
         }
 
         template <typename T, std::size_t _Sz, typename std::enable_if<
             std::container_traits<T>::is_array_or_vector>::type * = nullptr
         >
         int bind(const char (&name) [_Sz], const T & value, copy_semantic fcopy) {
+            auto idx = param_name2idx(name);
             if( &value == nullptr )
-                return bind(name, nullptr);
-            return bind(param_name2idx(name), value.data(), value.size() * sizeof(value[0]), fcopy);
+                return bind(idx, nullptr);
+            return bind(idx, value.data(), value.size() * sizeof(value[0]), fcopy);
         }
 
         template <typename T, std::size_t _Sz, typename std::enable_if<
             std::container_traits<T>::is_array_or_vector>::type * = nullptr
         >
         int bind(const std::string & name, const T & value, copy_semantic fcopy) {
+            auto idx = param_name2idx(name);
             if( &value == nullptr )
-                return bind(name, nullptr);
-            return bind(param_name2idx(name.c_str()), value.data(), value.size() * sizeof(value[0]), fcopy);
+                return bind(idx, nullptr);
+            return bind(idx, value.data(), value.size() * sizeof(value[0]), fcopy);
         }
     protected:
         ~statement() {

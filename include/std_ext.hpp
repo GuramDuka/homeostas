@@ -98,15 +98,15 @@ private:
     static char (&is_shared_ptr_helper(const shared_ptr<_Ty> &))[1];
     static char (&is_shared_ptr_helper(...))[2];
 
-    template <typename U//,
-        //typename = typename iterator_traits<U>::difference_type,
-        //typename = typename iterator_traits<U>::pointer,
-        //typename = typename iterator_traits<U>::reference,
-        //typename = typename iterator_traits<U>::value_type,
-        //typename = typename iterator_traits<U>::iterator_category
-    >
+    template <typename U>
     static char (&is_iterator_helper(const iterator_traits<U> &))[1];
     static char (&is_iterator_helper(...))[2];
+
+    template <typename U>
+    static char (&is_random_iterator_helper(const random_access_iterator_tag &))[1];
+    template <typename U>
+    static char (&is_random_iterator_helper(const iterator_traits<U> &))[sizeof(is_random_iterator_helper(U::iterator_category()))];
+    static char (&is_random_iterator_helper(...))[2];
 public:
     constexpr static bool is_array =
         sizeof(is_array_helper(declval<C>())) == sizeof(char[1]);
@@ -133,6 +133,8 @@ public:
         sizeof(is_shared_ptr_helper(declval<C>())) == sizeof(char[1]);
     constexpr static bool is_iterator =
         sizeof(is_iterator_helper(declval<C>())) == sizeof(char[1]);
+    constexpr static bool is_random_iterator =
+        sizeof(is_random_iterator_helper(declval<C>())) == sizeof(char[1]);
 };
 //------------------------------------------------------------------------------
 template <typename T> inline
@@ -168,7 +170,7 @@ OutputIt copy(InputIt first, InputIt last,
     while( first != last && d_first != d_last )
         *d_first++ = (decltype(*d_first)) (*first++);
     while( first != last )
-        *inserter++ = (decltype(*inserter)) (*first++);
+        *inserter++ = (decltype(*d_first)) (*first++);
 
     return d_first;
 }
@@ -178,6 +180,9 @@ OutputIt transform(InputIt first, InputIt last,
                    OutputIt d_first, OutputIt d_last,
                    UnaryOperation unary_op)
 {
+    if( distance(first, last) <= distance(d_first, d_last) )
+        return transform(first, last, d_first, unary_op);
+
     while( first != last && d_first != d_last )
         *d_first++ = unary_op(*first++);
 
@@ -190,6 +195,9 @@ OutputIt transform(InputIt first, InputIt last,
                    InserterIt inserter,
                    UnaryOperation unary_op)
 {
+    if( distance(first, last) <= distance(d_first, d_last) )
+        return transform(first, last, d_first, unary_op);
+
     while( first != last && d_first != d_last )
         *d_first++ = unary_op(*first++);
     while( first != last )
@@ -663,12 +671,10 @@ inline std::string to_string_ellapsed(uint64_t ns) {
 template <typename T>
 class ptr_iterator : public iterator<random_access_iterator_tag, T> {
 public:
-#if __GNUG__
     typedef typename iterator<random_access_iterator_tag, T>::pointer pointer;
     typedef typename iterator<random_access_iterator_tag, T>::reference reference;
     typedef typename iterator<random_access_iterator_tag, T>::difference_type difference_type;
     typedef typename iterator<random_access_iterator_tag, T>::value_type value_type;
-#endif
     typedef ptr_iterator<T> iterator;
 
     ~ptr_iterator() {}
@@ -698,16 +704,6 @@ public:
 protected:
     pointer ptr_;
 };
-//------------------------------------------------------------------------------
-//template <typename T> inline
-//ptr_iterator<T> begin(T * val, int) {
-//    return ptr_iterator<T>(val);
-//}
-//------------------------------------------------------------------------------
-//template <typename T> inline
-//ptr_iterator<T> end(T * val, int) {
-//    return ptr_iterator<T>(val);
-//}
 //------------------------------------------------------------------------------
 template <typename T>
 class ptr_range {
@@ -754,6 +750,21 @@ protected:
 template <typename T> inline
 ptr_range<T> make_range(T * ptr, size_t length) {
     return ptr_range<T>(ptr, length);
+}
+//------------------------------------------------------------------------------
+template <typename T> inline
+ptr_range<T> make_range(void * ptr, size_t length) {
+    return ptr_range<T>(static_cast<T *>(ptr), length);
+}
+//------------------------------------------------------------------------------
+template <typename T> inline
+ptr_range<const T> make_range(const T * ptr, size_t length) {
+    return ptr_range<const T>(ptr, length);
+}
+//------------------------------------------------------------------------------
+template <typename T> inline
+ptr_range<const T> make_range(const void * ptr, size_t length) {
+    return ptr_range<const T>(static_cast<const T *>(ptr), length);
 }
 //------------------------------------------------------------------------------
 template <typename InpT, class OutputIt> inline
@@ -961,7 +972,7 @@ public:
 template <typename T, typename M>
 constexpr const T uint_max(const T m, const M multiplier)
 {
-    return m * multiplier > m ? uint_max<T>(m * multiplier, multiplier) : m;
+    return T(m * multiplier) > m ? uint_max<T>(T(m * multiplier), multiplier) : m;
 }
 #else
 template <typename T, typename M>
@@ -969,7 +980,7 @@ constexpr const T uint_max(const T, const M multiplier)
 {
     T m = 1u;
 
-    for (;;) {
+    for(;;) {
         T n = T(m * multiplier);
         if( n <= m ) // overflow
             break;
@@ -986,13 +997,13 @@ inline string to_string(const key512 & b)
     constexpr const size_t interval = 9;
     string s;
     size_t i = 0;
-    auto l = nn::word(slen(abc));
-    assert( l == 36 );
-    nn::integer a(b.data(), b.size()), d(uint_max<nn::word>(1, 36)), mod;
+    auto l = nn::word(36); // slen(abc));
+    //assert( l == 36 );
+    nn::integer a(b.data(), b.size()), d(uint_max<nn::dword>(1, 36)), mod;
 
     while( a.is_notz() ) {
         a = a.div(d, &mod);
-        auto m = nn::word(mod);
+        auto m = nn::dword(mod);
 
         while( m ) {
             s.push_back(abc[m % l]);

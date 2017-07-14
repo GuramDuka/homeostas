@@ -469,65 +469,65 @@ constexpr const zero_initialized_type zero_initialized = {};
 //------------------------------------------------------------------------------
 template <typename T, typename enable_if<is_same<T, uint16_t>::value>::type * = nullptr>
 inline T htole(const T & v) {
-    return ::htole16(v);
+    return htole16(v);
 }
 //------------------------------------------------------------------------------
 template <typename T, typename enable_if<is_same<T, uint32_t>::value>::type * = nullptr>
 inline T htole(const T & v) {
-    return ::htole32(v);
+    return htole32(v);
 }
 //------------------------------------------------------------------------------
 template <typename T, typename enable_if<is_same<T, uint64_t>::value>::type * = nullptr>
 inline T htole(const T & v) {
-    return ::htole64(v);
+    return htole64(v);
 }
 //------------------------------------------------------------------------------
 template <typename T, typename enable_if<is_same<T, uint16_t>::value>::type * = nullptr>
 inline T htobe(const T & v) {
-    return ::htobe16(v);
+    return htobe16(v);
 }
 //------------------------------------------------------------------------------
 template <typename T, typename enable_if<is_same<T, uint32_t>::value>::type * = nullptr>
 inline T htobe(const T & v) {
-    return ::htobe32(v);
+    return htobe32(v);
 }
 //------------------------------------------------------------------------------
 template <typename T, typename enable_if<is_same<T, uint64_t>::value>::type * = nullptr>
 inline T htobe(const T & v) {
-    return ::htobe64(v);
+    return htobe64(v);
 }
 //------------------------------------------------------------------------------
 template <typename T, typename enable_if<is_same<T, uint16_t>::value>::type * = nullptr>
 inline T betoh(const T & v) {
-    return ::be16toh(v);
+    return be16toh(v);
 }
 //------------------------------------------------------------------------------
 template <typename T, typename enable_if<is_same<T, uint32_t>::value>::type * = nullptr>
 inline T betoh(const T & v) {
-    return ::be32toh(v);
+    return be32toh(v);
 }
 //------------------------------------------------------------------------------
 template <typename T, typename enable_if<is_same<T, uint64_t>::value>::type * = nullptr>
 inline T betoh(const T & v) {
-    return ::be64toh(v);
+    return be64toh(v);
 }
 //------------------------------------------------------------------------------
 template <typename T, typename enable_if<is_same<T, uint16_t>::value>::type * = nullptr>
 inline T letoh(const T & v) {
-    return ::le16toh(v);
+    return le16toh(v);
 }
 //------------------------------------------------------------------------------
 template <typename T, typename enable_if<is_same<T, uint32_t>::value>::type * = nullptr>
 inline T letoh(const T & v) {
-    return ::le32toh(v);
+    return le32toh(v);
 }
 //------------------------------------------------------------------------------
 template <typename T, typename enable_if<is_same<T, uint64_t>::value>::type * = nullptr>
 inline T letoh(const T & v) {
-    return ::le64toh(v);
+    return le64toh(v);
 }
 //------------------------------------------------------------------------------
-}
+} // namespace std
 //------------------------------------------------------------------------------
 namespace homeostas { namespace tests { void run_tests(); }}
 //------------------------------------------------------------------------------

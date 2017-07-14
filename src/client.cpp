@@ -57,7 +57,7 @@ void client::shutdown()
 void client::worker()
 {
     socket_stream ss;
-    std::key512 p2p_key(std::leave_uninitialized);
+    std::key512 p2p_key;
 
     ss.handshake_functor([&] (
         handshake::packet * req,
@@ -132,12 +132,12 @@ void client::worker()
             auto addrs = d.discover_host(server_public_key_, &p2p_key);
 
             while( !shutdown_ && !addrs.empty() ) {
-                auto e = std::rend(addrs), addr = std::find_if(std::rbegin(addrs), e, [] (const auto & a) {
+                auto e = addrs.rend(), addr = std::find_if(addrs.rbegin(), e, [] (const auto & a) {
                     return a.is_loopback();
                 });
 
                 if( addr == e )
-                    addr = std::rbegin(addrs);
+                    addr = addrs.rbegin();
 
                 if( addr != e ) {
                     socket_->exceptions(false);

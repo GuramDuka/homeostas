@@ -142,4 +142,5 @@ SOURCES += \
     src/announcer.cpp \
     src/configuration.cpp \
     src/discoverer.cpp \
-    src/sha512.cpp
+    src/sha512.cpp \
+    src/socket_stream.cpp

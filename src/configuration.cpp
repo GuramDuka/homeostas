@@ -52,6 +52,7 @@ void configuration::connect_db()
         );
 
         db_->execute_all(R"EOS(
+            PRAGMA busy_timeout = 3000;
             PRAGMA page_size = 4096;
             PRAGMA journal_mode = WAL;
             PRAGMA count_changes = OFF;
@@ -221,7 +222,7 @@ uint64_t configuration::get_pid(const char * var_name, const char ** p_name, boo
         connect_db();
 
         st_sel_->bind("parent_id", pid);
-        st_sel_->bind("name", (const char *) n, sqlite3pp::nocopy);
+        st_sel_->bind("name", n, sqlite3pp::nocopy);
 
         at_scope_exit( st_sel_->reset() );
         auto i = st_sel_->begin();
@@ -234,13 +235,14 @@ uint64_t configuration::get_pid(const char * var_name, const char ** p_name, boo
 
             st_ins_->bind("id"        , id);
             st_ins_->bind("parent_id" , pid);
-            st_ins_->bind("name"      , (const char *) n, sqlite3pp::nocopy);
+            st_ins_->bind("name"      , n, sqlite3pp::nocopy);
             st_ins_->bind("value_type", nullptr);
             st_ins_->bind("value_b"   , nullptr);
             st_ins_->bind("value_i"   , nullptr);
             st_ins_->bind("value_n"   , nullptr);
             st_ins_->bind("value_s"   , nullptr);
             st_ins_->bind("value_l"   , nullptr);
+            st_sel_->reset(); // unlock table
             st_ins_->execute();
 
             pid = id;

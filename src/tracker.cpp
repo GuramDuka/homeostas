@@ -48,6 +48,7 @@ void directory_tracker::worker()
         );
 
         db.execute_all(R"EOS(
+            PRAGMA busy_timeout = 3000;
             PRAGMA page_size = 4096;
             PRAGMA journal_mode = WAL;
             PRAGMA count_changes = OFF;

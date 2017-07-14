@@ -111,7 +111,7 @@ inline void throw_if_error(uint8_t e) {
 //------------------------------------------------------------------------------
 struct PACKED packet {
     void generate_session_key() {
-        cdc512 ctx(std::leave_uninitialized);
+        cdc512 ctx;
         ctx.generate_entropy_fast();
         std::copy(std::begin(ctx), std::end(ctx),
             std::begin(session_key), std::end(session_key));
@@ -157,39 +157,75 @@ struct PACKED packet {
 #   pragma pack()
 #endif
 //------------------------------------------------------------------------------
-inline void negotiate(packet * server, packet * client) {
-    if( client->proto_version != server->proto_version )
-        server->error = handshake::ErrorInvalidProto;
-    // encryption required on client side but disabled on server side
-    else if( client->encryption_option == handshake::OptionDisable
-         && server->encryption_option == handshake::OptionRequired )
-        server->error = handshake::ErrorEncryptionDisabled;
-    // encryption required on server side but disabled on client side
-    else if( client->encryption_option == handshake::OptionRequired
-         && server->encryption_option == handshake::OptionDisable )
-        server->error = handshake::ErrorEncryptionRequired;
-    // check encryption range
-    else if( client->encryption >= handshake::EncryptionMaxValue )
-        server->error = handshake::ErrorInvalidEncryption;
-    // compression required on client side but disabled on server side
-    else if( client->compression_option == handshake::OptionDisable
-         && server->compression_option == handshake::OptionRequired )
-        server->error = handshake::ErrorCompressionDisabled;
-    // compression required on server side but disabled on client side
-    else if( client->compression_option == handshake::OptionRequired
-         && server->compression_option == handshake::OptionDisable )
-        server->error = handshake::ErrorCompressionRequired;
-    // check compression range
-    else if( client->compression >= handshake::CompressionMaxValue )
-        server->error = handshake::ErrorInvalidCompression;
-}
+void negotiate_channel_options(packet * server, packet * client);
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+class negotiator {
+public:
+    typedef std::function<void (
+            handshake::packet * req,
+            handshake::packet * res,
+            std::key512 * p_local_transport_key,
+            std::key512 * p_remote_transport_key)> handshake_functor_t;
+
+    void client_side_handshake(basic_socket * socket);
+    void server_side_handshake(basic_socket * socket);
+    void init_ciphers(const std::key512 & local_transport_key, const std::key512 & remote_transport_key);
+
+    template <typename InpRange, typename OutRange, typename std::enable_if<
+            std::is_same<typename std::remove_const<typename InpRange::value_type>::type, typename OutRange::value_type>::value
+            //&& std::is_same<typename std::iterator_traits<InpRange>::iterator_category, std::random_access_iterator_tag>::value
+            //&& std::is_same<typename std::iterator_traits<OutRange>::iterator_category, std::random_access_iterator_tag>::value
+        >::type * = nullptr
+    >
+    void encrypt(InpRange inp_range, OutRange out_range) {
+        assert( std::distance(inp_range.begin(), inp_range.end()) == std::distance(out_range.begin(), out_range.end()) );
+
+        if( encryption_ == EncryptionLight )
+            light_chiper_encryptor_->encode(inp_range, out_range);
+        else if( encryption_ == EncryptionStrong )
+            strong_chiper_encryptor_->encode(inp_range, out_range);
+    }
+
+    template <typename InpRange, typename OutRange, typename std::enable_if<
+            std::is_same<typename std::remove_const<typename InpRange::value_type>::type, typename OutRange::value_type>::value
+            //&& std::is_same<typename std::iterator_traits<InpRange>::iterator_category, std::random_access_iterator_tag>::value
+            //&& std::is_same<typename std::iterator_traits<OutRange>::iterator_category, std::random_access_iterator_tag>::value
+        >::type * = nullptr
+    >
+    void decrypt(InpRange inp_range, OutRange out_range) {
+        assert( std::distance(inp_range.begin(), inp_range.end()) == std::distance(out_range.begin(), out_range.end()) );
+
+        if( encryption_ == EncryptionLight )
+            light_chiper_decryptor_->encode(inp_range, out_range);
+        else if( encryption_ == EncryptionStrong )
+            strong_chiper_decryptor_->encode(inp_range, out_range);
+    }
+
+    handshake_functor_t handshake_functor_;
+    std::unique_ptr<light_cipher>  light_chiper_encryptor_;
+    std::unique_ptr<light_cipher>  light_chiper_decryptor_;
+    std::unique_ptr<strong_cipher> strong_chiper_encryptor_;
+    std::unique_ptr<strong_cipher> strong_chiper_decryptor_;
+
+    Proto               proto_              = ProtocolRAW;
+    Encryption          encryption_         = EncryptionNone;
+    Option              encryption_option_  = OptionDisable;
+    Compression         compression_        = CompressionNone;
+    Option              compression_option_ = OptionDisable;
+    bool                handshaked_         = false;
+};
 //------------------------------------------------------------------------------
 } // namespace handshake
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 template <class _Elem, class _Traits>
-class basic_socket_streambuf : public std::basic_streambuf<_Elem, _Traits> {
+class basic_socket_streambuf :
+        public std::basic_streambuf<_Elem, _Traits>,
+        protected handshake::negotiator
+{
 public:
 #if __GNUG__
     using typename std::basic_streambuf<_Elem, _Traits>::__streambuf_type;
@@ -269,7 +305,7 @@ protected:
         // return traits_type::eof();
 
         if( gptr() >= egptr() ) {
-            server_side_handshake();
+            server_side_handshake(socket_);
 
             auto exceptions_safe = socket_->exceptions();
             at_scope_exit( socket_->exceptions(exceptions_safe) );
@@ -277,15 +313,11 @@ protected:
 
             auto r = socket_->recv(eback(), 0, gbuf_->size() * sizeof(char_type));
 
-            if( encryption_ == handshake::EncryptionLight ) {
-                light_chiper_decryptor_->encode(std::make_range((const uint8_t *) eback(), r), std::make_range((uint8_t *) eback(), r));
-            }
-            else if( encryption_ == handshake::EncryptionStrong ) {
-                strong_chiper_decryptor_->encode(std::make_range((const uint8_t *) eback(), r), std::make_range((uint8_t *) eback(), r));
-            }
-
             if( r <= 0 )
                 return traits_type::eof();
+
+            decrypt(std::make_range((const uint8_t *) eback(), r),
+                std::make_range((uint8_t *) eback(), r));
 
             // reset input buffer pointers
             setg(gbuf_->data(), gbuf_->data(), gbuf_->data() + r);
@@ -357,7 +389,7 @@ protected:
 
         // we have some data to flush
         if( wval != 0 ) {
-            client_side_handshake();
+            client_side_handshake(socket_);
 
             auto exceptions_safe = socket_->exceptions();
             at_scope_exit( socket_->exceptions(exceptions_safe) );
@@ -365,16 +397,8 @@ protected:
 
             size_t bytes = wval * sizeof(char_type), w;
 
-            if( compression_ == handshake::CompressionLZ4 ) {
-
-            }
-
-            if( encryption_ == handshake::EncryptionLight ) {
-                light_chiper_encryptor_->encode(std::make_range((const uint8_t *) pbase(), bytes), std::make_range((uint8_t *) pbase(), bytes));
-            }
-            else if( encryption_ == handshake::EncryptionStrong ) {
-                strong_chiper_encryptor_->encode(std::make_range((const uint8_t *) pbase(), bytes), std::make_range((uint8_t *) pbase(), bytes));
-            }
+            encrypt(std::make_range((const uint8_t *) pbase(), bytes),
+                std::make_range((uint8_t *) pbase(), bytes));
 
             w = socket_->send((const void *) pbase(), bytes);
 
@@ -400,8 +424,6 @@ protected:
     // handshaking section
     //--------------------------------------------
 public:
-    typedef std::function<void (handshake::packet * req, handshake::packet * res, std::key512 * p_local_transport_key, std::key512 * p_remote_transport_key)> handshake_functor_t;
-
     auto & handshake_functor(const handshake_functor_t & f) {
         handshake_functor_ = f;
         return *this;
@@ -451,179 +473,6 @@ public:
     const auto & compression_option() const {
         return compression_option_;
     }
-protected:
-    handshake_functor_t handshake_functor_;
-
-    void client_side_handshake() {
-        using namespace handshake;
-
-        if( proto_ == ProtocolRAW || handshaked_ )
-            return;
-
-        auto exceptions_safe = socket_->exceptions();
-        at_scope_exit( socket_->exceptions(exceptions_safe) );
-        socket_->exceptions(true);
-
-        if( proto_ == ProtocolV1 ) {
-            auto req = std::make_unique<handshake::packet>();
-            auto res = std::make_unique<handshake::packet>();
-            auto xchg = [&] {
-                req->error = ErrorNone;
-                req->generate_session_key();
-                req->fix();
-
-                req->scramble();
-                socket_->send(req.get(), sizeof(*req));
-                req->scramble();
-
-                auto r = socket_->recv(res.get(), sizeof(*res));
-
-                if( r != sizeof(*res) )
-                    throw std::xruntime_error("Network error", __FILE__, __LINE__);
-
-                res->scramble();
-
-                throw_if_error(res->error);
-
-                negotiate(req.get(), res.get());
-
-                throw_if_error(req->error);
-
-                req->encryption  = res->encryption;
-                req->compression = res->compression;
-
-                handshake_functor_(req.get(), res.get(), nullptr, nullptr);
-                throw_if_error(req->error);
-            };
-
-            handshake_functor_(req.get(), nullptr, nullptr, nullptr);
-            throw_if_error(req->error);
-
-            req->proto_version      = proto_;
-            req->encryption_option  = encryption_option_;
-            req->compression_option = compression_option_;
-            req->encryption         = encryption_option_  == OptionDisable || encryption_option_  == OptionAllow ? EncryptionNone  : encryption_;
-            req->compression        = compression_option_ == OptionDisable || compression_option_ == OptionAllow ? CompressionNone : compression_;
-
-            xchg();
-
-            if( req->encryption != EncryptionNone ) {
-                std::key512 local_transport_key, remote_transport_key;
-                handshake_functor_(req.get(), res.get(), &local_transport_key, &remote_transport_key);
-                init_ciphers(local_transport_key, remote_transport_key);
-                encryption_ = Encryption(req->encryption);
-            }
-
-            if( req->compression != CompressionNone ) {
-                compression_ = Compression(req->compression);
-            }
-        }
-
-        handshaked_ = true;
-    }
-
-    void server_side_handshake() {
-        using namespace handshake;
-
-        if( proto_ == ProtocolRAW || handshaked_ )
-            return;
-
-        auto exceptions_safe = socket_->exceptions();
-        at_scope_exit( socket_->exceptions(exceptions_safe) );
-        socket_->exceptions(false);
-
-        if( proto_ == ProtocolV1 ) {
-            auto req = std::make_unique<handshake::packet>();
-            auto res = std::make_unique<handshake::packet>();
-            auto xchg = [&] {
-                auto r = socket_->recv(req.get(), sizeof(*req));
-
-                if( r != sizeof(*req) )
-                    throw std::xruntime_error("Network error", __FILE__, __LINE__);
-
-                req->scramble();
-
-                res->error = ErrorNone;
-                res->generate_session_key();
-                res->fix();
-
-                negotiate(res.get(), req.get());
-
-                throw_if_error(res->error);
-
-                if( encryption_option_ == OptionAllow )
-                    res->encryption = req->encryption;
-
-                if( compression_option_ == OptionAllow )
-                    res->compression = req->compression;
-
-                handshake_functor_(req.get(), res.get(), nullptr, nullptr);
-                throw_if_error(res->error);
-
-                req->scramble();
-                socket_->send(res.get(), sizeof(*res));
-                req->scramble();
-            };
-
-            res->proto_version      = proto_;
-            res->encryption_option  = encryption_option_;
-            res->compression_option = compression_option_;
-            res->encryption         = encryption_;
-            res->compression        = compression_;
-
-            xchg();
-
-            if( res->encryption != EncryptionNone ) {
-                std::key512 local_transport_key, remote_transport_key;
-                handshake_functor_(req.get(), res.get(), &local_transport_key, &remote_transport_key);
-                init_ciphers(local_transport_key, remote_transport_key);
-                encryption_ = Encryption(res->encryption);
-            }
-
-            if( res->compression != CompressionNone ) {
-                compression_ = Compression(res->compression);
-            }
-        }
-
-        handshaked_ = true;
-    }
-
-    void init_ciphers(const std::key512 & local_transport_key, const std::key512 & remote_transport_key) {
-        if( encryption_ == handshake::EncryptionLight ) {
-            if( light_chiper_encryptor_ == nullptr )
-                light_chiper_encryptor_ = std::make_unique<light_cipher>();
-
-            light_chiper_encryptor_->init(local_transport_key);
-
-            if( light_chiper_decryptor_ == nullptr )
-                light_chiper_decryptor_ = std::make_unique<light_cipher>();
-
-            light_chiper_decryptor_->init(remote_transport_key);
-        }
-        else if( encryption_ == handshake::EncryptionStrong ) {
-            if( strong_chiper_encryptor_ == nullptr )
-                strong_chiper_encryptor_ = std::make_unique<strong_cipher>();
-
-            strong_chiper_encryptor_->init(local_transport_key);
-
-            if( strong_chiper_decryptor_ == nullptr )
-                strong_chiper_decryptor_ = std::make_unique<strong_cipher>();
-
-            strong_chiper_decryptor_->init(remote_transport_key);
-        }
-    }
-
-    std::unique_ptr<light_cipher>  light_chiper_encryptor_;
-    std::unique_ptr<light_cipher>  light_chiper_decryptor_;
-    std::unique_ptr<strong_cipher> strong_chiper_encryptor_;
-    std::unique_ptr<strong_cipher> strong_chiper_decryptor_;
-
-    handshake::Proto               proto_              = handshake::ProtocolRAW;
-    handshake::Encryption          encryption_         = handshake::EncryptionNone;
-    handshake::Option              encryption_option_  = handshake::OptionDisable;
-    handshake::Compression         compression_        = handshake::CompressionNone;
-    handshake::Option              compression_option_ = handshake::OptionDisable;
-    bool                           handshaked_;
 };
 //------------------------------------------------------------------------------
 typedef basic_socket_streambuf<char, std::char_traits<char>> socket_streambuf;
@@ -660,7 +509,8 @@ public:
 
     auto & delimiter(const int_type & t) {
         delimiter_.clear();
-        delimiter_.push_back(t);
+        if( t != _Traits::eof() )
+            delimiter_.push_back(t);
         return *this;
     }
 
@@ -674,7 +524,7 @@ public:
 
     auto & delimiter(const _Elem * t) {
         delimiter_.clear();
-        while( *t != _Elem() ) {
+        while( *t != _Elem('\0') ) {
             delimiter_.push_back(traits_type::to_int_type(*t));
             t++;
         }
@@ -708,10 +558,11 @@ homeostas::basic_socket_istream<_Elem, _Traits> & operator >> (
     basic_string<_Elem, _Traits, _Alloc> & s)
 {
     const auto & delimiter = ss.delimiter();
-    const auto b = delimiter.begin(), e = delimiter.end();
-    const auto d = distance(b, e);
+    auto b = delimiter.cbegin(), e = delimiter.cend();
+    auto d = distance(b, e);
+    auto m = _Traits::to_char_type(d == 0 ? '\0' : *b);
 
-    getline(ss, s, d == 0 ? _Traits::to_char_type('\0') : _Traits::to_char_type(*b));
+    getline(ss, s, m);
 
     if( d != 0 ) {
         auto i = b + 1;
@@ -831,6 +682,21 @@ protected:
 } // namespace homeostas
 //------------------------------------------------------------------------------
 namespace std {
+//------------------------------------------------------------------------------
+template <class _Traits> inline
+homeostas::basic_socket_ostream<char, _Traits> & operator << (
+    homeostas::basic_socket_ostream<char, _Traits> & ss,
+    const char * s)
+{
+    auto & bos = *static_cast<basic_ostream<char, _Traits> *>(&ss);
+
+    bos << s;
+
+    for( const auto & c : ss.ends() )
+        bos << _Traits::to_char_type(c);
+
+    return ss;
+}
 //------------------------------------------------------------------------------
 template <class _Elem, class _Traits, class _Alloc> inline
 homeostas::basic_socket_ostream<_Elem, _Traits> & operator << (

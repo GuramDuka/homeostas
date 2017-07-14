@@ -91,7 +91,8 @@ void indexer_test()
         sqlite3pp::database db(db_name);
 
 		sqlite3pp::command pragmas(db, R"EOS(
-			PRAGMA page_size = 4096;
+            PRAGMA busy_timeout = 3000;
+            PRAGMA page_size = 4096;
 			PRAGMA journal_mode = WAL;
 			PRAGMA count_changes = OFF;
             PRAGMA auto_vacuum = FULL;

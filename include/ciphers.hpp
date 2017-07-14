@@ -42,7 +42,7 @@ struct light_cipher : protected cdc512 {
     light_cipher() : cdc512(std::leave_uninitialized) {}
 
     void init(const std::key512 & key) {
-        cdc512::operator = (key);
+        cdc512::init(key);
         mask_ring = end();
     }
 
@@ -63,6 +63,10 @@ struct light_cipher : protected cdc512 {
     template <typename InpRange, typename OutRange>
     void encode(InpRange s_range, OutRange d_range) {
         encode(std::begin(s_range), std::end(s_range), std::begin(d_range), std::end(d_range));
+    }
+
+    void encode(void * dst, const void * src, size_t length) {
+        encode(std::make_range<const uint8_t>(src, length), std::make_range<uint8_t>(dst, length));
     }
 
     iterator mask_ring;
@@ -101,6 +105,10 @@ struct strong_cipher : protected rand<7, uint64_t> {
     template <typename InpRange, typename OutRange>
     void encode(InpRange s_range, OutRange d_range) {
         encode(std::begin(s_range), std::end(s_range), std::begin(d_range), std::end(d_range));
+    }
+
+    void encode(void * dst, const void * src, size_t length) {
+        encode(std::make_range<const uint8_t>(src, length), std::make_range<uint8_t>(dst, length));
     }
 
     union {

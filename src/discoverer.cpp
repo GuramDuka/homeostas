@@ -43,6 +43,7 @@ void discoverer::connect_db()
         );
 
         db_->execute_all(R"EOS(
+            PRAGMA busy_timeout = 3000;
             PRAGMA page_size = 4096;
             PRAGMA journal_mode = WAL;
             PRAGMA count_changes = OFF;
@@ -164,14 +165,32 @@ discoverer & discoverer::announce_host(
 #endif
 
     auto bind = [&] (auto & st) {
+        std::blob packed_addrs;
         st->bind("public_key", public_key, sqlite3pp::nocopy);
-        st->bind("addrs", *p_addrs, sqlite3pp::nocopy);
+
+        if( p_addrs != nullptr ) {
+
+            for( const auto & a : *p_addrs )
+                std::copy(std::make_range((const uint8_t *) a.data(), a.size()),
+                    packed_addrs.end(), packed_addrs.end(),
+                    std::back_inserter(packed_addrs));
+
+            if( packed_addrs.empty() )
+                st->bind("addrs", nullptr);
+            else
+                st->bind("addrs", packed_addrs, sqlite3pp::nocopy);
+        }
+        else {
+            st->bind("addrs", nullptr);
+        }
+
         st->bind("p2p_key", *p_p2p_key, sqlite3pp::nocopy);
 
         auto ns = clock_gettime_ns();
         st->bind("mtime", ns);
         st->bind("expire", ns + std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::seconds(60)).count());
 
+        st_sel_peer_->reset(); // unlock table
         st->execute();
     };
 
@@ -187,7 +206,6 @@ discoverer & discoverer::announce_host(
             p_p2p_key = &p2p_key;
         }
 
-        st_sel_peer_->reset();
         bind(st_upd_peer_);
     }
     else {
@@ -199,7 +217,7 @@ discoverer & discoverer::announce_host(
 //------------------------------------------------------------------------------
 std::vector<socket_addr> discoverer::discover_host(const std::key512 & public_key, std::key512 * p_p2p_key)
 {
-    std::vector<socket_addr> t;
+    std::vector<socket_addr> addrs;
 
     connect_db();
     st_sel_peer_->bind("public_key", public_key, sqlite3pp::nocopy);
@@ -212,13 +230,25 @@ std::vector<socket_addr> discoverer::discover_host(const std::key512 & public_ke
     auto i = st_sel_peer_->begin();
 
     if( i ) {
-        t = i->get<decltype(t)>("addrs");
+        auto t = i->get<std::blob>("addrs");
+        auto b = t.begin(), e = t.end();
+
+        while( size_t(std::distance(b, e)) >= sizeof(sockaddr) ) {
+            auto sa = reinterpret_cast<const sockaddr *>(&*b);
+            addrs.emplace_back(*sa);
+            auto sz = addrs.back().size();
+            if( sz == 0 ) {
+                addrs.pop_back();
+                break;
+            }
+            b += sz;
+        }
 
         if( p_p2p_key != nullptr )
             *p_p2p_key = i->get<std::key512>("p2p_key");
     }
 
-    return t;
+    return addrs;
 }
 //------------------------------------------------------------------------------
 std::key512 discoverer::discover_host_p2p_key(const std::key512 & public_key)

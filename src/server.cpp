@@ -244,8 +244,8 @@ void server::control()
 void server::worker(std::shared_ptr<active_socket> socket)
 {
     socket_stream ss(socket);
-    std::key512 peer_pubic_key(std::leave_uninitialized);
-    std::key512 p2p_key(std::leave_uninitialized);
+    std::key512 peer_pubic_key;
+    std::key512 p2p_key;
 
     ss.handshake_functor([&] (
         handshake::packet * req,

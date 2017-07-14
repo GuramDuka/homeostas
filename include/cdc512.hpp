@@ -247,6 +247,7 @@ struct cdc512 : public std::key512 {
 
     cdc512 & operator = (const std::key512 & o) {
         std::key512::operator = (o);
+        p = 0;
         return *this;
     }
 
@@ -273,7 +274,7 @@ struct cdc512 : public std::key512 {
     }
 
     template <typename InputIt, typename
-        std::enable_if<std::is_same<typename InputIt::value_type, value_type>::value>::type * = nullptr
+        std::enable_if<std::is_same<typename std::iterator_traits<InputIt>::value_type, value_type>::value>::type * = nullptr
     >
     auto & init(InputIt first, InputIt last) {
         std::copy(first, last, begin(), end());
@@ -282,7 +283,7 @@ struct cdc512 : public std::key512 {
     }
 
     template <typename InputIt, typename
-        std::enable_if<!std::is_same<typename InputIt::value_type, value_type>::value>::type * = nullptr
+        std::enable_if<!std::is_same<typename std::iterator_traits<InputIt>::value_type, value_type>::value>::type * = nullptr
     >
     auto & init(InputIt first, InputIt last) {
         std::transform(first, last, begin(), end(), [] (const auto & a) {
@@ -292,7 +293,15 @@ struct cdc512 : public std::key512 {
         return *this;
     }
 
-    template <typename InputIt>
+    cdc512 & init(const std::key512 & o) {
+        std::key512::operator = (o);
+        p = 0;
+        return *this;
+    }
+
+    template <typename InputIt, typename
+        std::enable_if<std::is_same<typename std::iterator_traits<InputIt>::iterator_category, std::random_access_iterator_tag>::value>::type * = nullptr
+    >
     auto & update(InputIt first, InputIt last) {
         return update(&*first, (last - first) * sizeof(*first));
     }
