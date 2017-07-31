@@ -46,7 +46,7 @@
 #include <memory>
 
 #include "sqlite/sqlite3.h"
-#include "std_ext.hpp"
+//#include "std_ext.hpp"
 
 namespace sqlite3pp {
     namespace ext {

@@ -36,6 +36,7 @@
 #include <condition_variable>
 #include <type_traits>
 //------------------------------------------------------------------------------
+#include "std_ext.hpp"
 #include "sqlite3pp/sqlite3pp.h"
 #include "thread_pool.hpp"
 #include "socket_stream.hpp"

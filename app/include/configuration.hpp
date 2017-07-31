@@ -35,6 +35,7 @@
 #include <iterator>
 //------------------------------------------------------------------------------
 #include "variant.hpp"
+#include "std_ext.hpp"
 #include "sqlite3pp/sqlite3pp.h"
 //------------------------------------------------------------------------------
 namespace homeostas {
