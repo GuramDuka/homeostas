@@ -146,7 +146,7 @@ void configuration::connect_db()
                 id = :id
         )EOS");
 
-        row_id_ = entropy_fast();
+        while( (row_id_ = entropy_fast()) == 0 );
 
         row_next_id_ = [&] {
             at_scope_exit( st_row_next_id_->reset() );
@@ -156,7 +156,7 @@ void configuration::connect_db()
                 auto i = st_row_next_id_->begin();
 
                 if( i ) {
-                    row_id_ = std::ihash<uint64_t>(std::rhash(row_id_));
+                    while( (row_id_ = std::ihash<uint64_t>(std::rhash(row_id_) + 1) ^ row_id_) == 0 );
                 }
                 else
                     break;
@@ -271,13 +271,13 @@ std::variant configuration::get(const char * var_name, const std::variant * p_de
     return nullptr;
 }
 //------------------------------------------------------------------------------
-configuration & configuration::set(const char * var_name, const char * val)
+configuration & configuration::set(const char * var_name, const char * val, int)
 {
     bool create_if_not_exists = true;
     const char * p = nullptr;
     uint64_t pid = get_pid(var_name, &p, &create_if_not_exists);
 
-    return set(pid, p, [&] (auto & st) {
+    return set(pid, 0, p, [&] (auto & st) {
         st->bind("value_type", int8_t(std::variant::Text));
         st->bind("value_s"   , val, sqlite3pp::nocopy);
         st->execute();
@@ -290,7 +290,7 @@ configuration & configuration::set(const char * var_name, const std::variant & v
     const char * p = nullptr;
     uint64_t pid = get_pid(var_name, &p, &create_if_not_exists);
 
-    return set(pid, p, val);
+    return set(pid, 0, p, val);
 }
 //------------------------------------------------------------------------------
 variable configuration::get_tree(const char * var_name)
@@ -312,7 +312,7 @@ variable configuration::get_tree(const char * var_name)
             for( auto i = st_sel_by_pid_->begin(); i; ++i ) {
                 var.childs()->emplace(std::make_pair(
                     i->get<const char *>("name"),
-                    variable(i->get<uint64_t>("id"), i->get<const char *>("name"), get(i))
+                    variable(var.id_, i->get<uint64_t>("id"), i->get<const char *>("name"), get(i))
                 ));
             }
 

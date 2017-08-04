@@ -1,6 +1,6 @@
-import QtQuick 2.5
-import QtQuick.Layouts 1.1
-import QtQuick.Controls 2.1
+import QtQuick 2.8
+import QtQuick.Layouts 1.3
+import QtQuick.Controls 2.2
 
 ItemDelegate {
     id: delegate
@@ -20,20 +20,58 @@ ItemDelegate {
             id: grid
             visible: false
 
-            columns: 2
+            columns: 3
             rowSpacing: 4
             columnSpacing: 4
 
             Label {
-                text: qsTr("Path:")
+                text: qsTr("Key")
                 Layout.leftMargin: 10
             }
 
             Label {
-                text: path
-                font.bold: true
+                text: ":"
+            }
+
+            Label {
+                text: key
                 elide: Text.ElideRight
                 Layout.fillWidth: true
+            }
+
+            Label {
+                text: qsTr("Path")
+                Layout.leftMargin: 10
+            }
+
+            Label {
+                text: ":"
+            }
+
+            Label {
+                text: path
+                //font.bold: true
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+            }
+
+            Label {
+                text: qsTr("Remote")
+                Layout.leftMargin: 10
+                visible: is_remote
+            }
+
+            Label {
+                text: ":"
+                visible: is_remote
+            }
+
+            Label {
+                text: remote
+                //font.bold: true
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+                visible: is_remote
             }
         }
     }

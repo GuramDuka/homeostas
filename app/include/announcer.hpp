@@ -59,17 +59,19 @@ public:
     void startup();
     void shutdown();
 
+    auto & host_key(const std::key512 & key) {
+        host_key_ = key;
+        return *this;
+    }
+
     auto & pubs(const std::vector<socket_addr> & pubs) {
         pubs_ = pubs;
         return *this;
     }
-
-    const auto & pubs() const {
-        return pubs_;
-    }
 protected:
     void worker();
 
+    std::blob host_key_;
     std::vector<socket_addr> pubs_;
     std::unique_ptr<active_socket> socket_;
     std::shared_future<void> worker_result_;

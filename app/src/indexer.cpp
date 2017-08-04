@@ -452,23 +452,9 @@ void directory_indexer::reindex(
             mtime			INTEGER,            /* nanoseconds */
             file_size		INTEGER,            /* file size in bytes */
             block_size		INTEGER,            /* file block size in bytes */
-            digest			BLOB,               /* file checksum */
+            digest			BLOB                /* file checksum, or snap key for root */
             UNIQUE(parent_id, name) ON CONFLICT ABORT
         ) WITHOUT ROWID;
-
-        /*CREATE TRIGGER IF NOT EXISTS entries_after_insert_trigger
-            AFTER INSERT
-            ON entries
-        BEGIN
-            REPLACE INTO rowids(id, counter) VALUES (1, new.id);
-        END;*/
-
-        CREATE TRIGGER IF NOT EXISTS entries_after_delete_trigger
-            AFTER DELETE
-            ON entries FOR EACH ROW
-        BEGIN
-            DELETE FROM blocks_digests WHERE entry_id = old.id;
-        END;
 
         CREATE UNIQUE INDEX IF NOT EXISTS i1 ON entries (parent_id, name);
         CREATE INDEX IF NOT EXISTS i2 ON entries (is_alive);
@@ -481,6 +467,37 @@ void directory_indexer::reindex(
             UNIQUE(entry_id, block_no) ON CONFLICT ABORT
         )/*WITHOUT ROWID*/;
         CREATE UNIQUE INDEX IF NOT EXISTS i3 ON blocks_digests (entry_id, block_no);
+
+        CREATE TABLE IF NOT EXISTS remote_trackers (
+            key             BLOB PRIMARY KEY ON CONFLICT ABORT, /* remote tracker host public key */
+            ctime			INTEGER NOT NULL,                   /* nanoseconds */
+            mtime			INTEGER NOT NULL                    /* nanoseconds */
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS remote_tracking (
+            key             BLOB NOT NULL,      /* remote tracker host public key */
+            entry_id        INTEGER NOT NULL,   /* link on entries rowid */
+            block_no		INTEGER NOT NULL    /* file block number starting from one */
+            UNIQUE(entry_id, block_no, key) ON CONFLICT REPLACE
+        ) /*WITHOUT ROWID*/;
+        CREATE UNIQUE INDEX IF NOT EXISTS i4 ON remote_tracking (key, entry_id, block_no, key);
+        /*CREATE INDEX IF NOT EXISTS i5 ON remote_tracking (entry_id);
+        CREATE INDEX IF NOT EXISTS i6 ON remote_tracking (entry_id, block_no);*/
+
+        CREATE TRIGGER IF NOT EXISTS entries_after_delete_trigger
+            AFTER DELETE
+            ON entries FOR EACH ROW
+        BEGIN
+            DELETE FROM remote_tracking WHERE entry_id = old.id;
+            DELETE FROM blocks_digests WHERE entry_id = old.id;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS blocks_digests_after_delete_trigger
+            AFTER DELETE
+            ON blocks_digests FOR EACH ROW
+        BEGIN
+            DELETE FROM remote_tracking WHERE entry_id = old.entry_id AND block_no = old.block_no;
+        END;
     )EOS");
 
     sqlite3pp::query row_next_id_st(db, R"EOS(
@@ -514,7 +531,8 @@ void directory_indexer::reindex(
     sqlite3pp::query st_sel(db, R"EOS(
         SELECT
             id,
-            mtime
+            mtime,
+            digest
         FROM
             entries
         WHERE
@@ -591,6 +609,21 @@ void directory_indexer::reindex(
             AND block_no > :block_no
     )EOS");
 
+    sqlite3pp::command st_rt_rpl(db, R"EOS(
+        REPLACE INTO remote_tracking
+            SELECT
+                key, :entry_id, :block_no
+            FROM
+                remote_trackers
+    )EOS");
+
+    sqlite3pp::command st_rt_del(db, R"EOS(
+        DELETE FROM remote_tracking
+        WHERE
+            entry_id = :entry_id
+            AND block_no > :block_no
+    )EOS");
+
     struct parent_dir {
         uint64_t id;
         uint64_t mtim;
@@ -600,15 +633,11 @@ void directory_indexer::reindex(
     std::unordered_map<std::string, parent_dir> parents;
     sqlite3pp::transaction tx(&db);
 
-    auto ms2ns = [] (auto ms) {
-        return 1000ull * ms;
-    };
-
     auto tx_start = clock_gettime_ns();
 
     auto tx_deadline = [&] {
         auto now = clock_gettime_ns();
-        auto deadline = tx_start + ms2ns(50);
+        auto deadline = tx_start + std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::milliseconds(50)).count();
 
         if( now >= deadline ) {
             tx.commit();
@@ -620,7 +649,8 @@ void directory_indexer::reindex(
         uint64_t entry_id,
         uint64_t blk_no,
         uint64_t mtim,
-        const std::key512 & block_digest)
+        const std::key512 & block_digest,
+        const std::key512 & prev_block_digest)
     {
         auto bind = [&] (auto & st) {
             st.bind("entry_id", entry_id);
@@ -632,13 +662,19 @@ void directory_indexer::reindex(
         bind(st_blk_ins);
 
         db.exceptions(false);
+        st_blk_ins.execute();
+        db.exceptions(true);
 
-        if( st_blk_ins.execute() == SQLITE_CONSTRAINT_UNIQUE ) {
+        if( st_blk_ins.rc() == SQLITE_CONSTRAINT_UNIQUE ) {
             bind(st_blk_upd);
             st_blk_upd.execute();
         }
 
-        db.exceptions(true);
+        if( block_digest != prev_block_digest ) {
+            st_rt_rpl.bind("entry_id", entry_id);
+            st_rt_rpl.bind("block_no", blk_no);
+            st_rt_rpl.execute();
+        }
 
         tx_deadline();
     };
@@ -678,6 +714,8 @@ void directory_indexer::reindex(
         uint64_t id = 0, mtim = 0;
 
         auto get_id_mtim = [&] {
+            at_scope_exit( st_sel.reset() );
+
             auto i = st_sel.begin();
 
             if( i ) {
@@ -723,6 +761,7 @@ void directory_indexer::reindex(
     };
 
     directory_reader dr;
+    bool update_snap = false;
 
     auto update_blocks = [&] (
         cdc512 & file_ctx,
@@ -771,7 +810,7 @@ void directory_indexer::reindex(
             return false;
 
         uint64_t blk_no = 0;
-        std::vector<uint8_t> buf(block_size);
+        std::unique_ptr<uint8_t> buf(new uint8_t [block_size]);
 
         for(;;) {//while( !in.eof() ) {
             if( p_shutdown != nullptr && *p_shutdown ) {
@@ -784,29 +823,27 @@ void directory_indexer::reindex(
             //in.read(reinterpret_cast<char *>(buf), BLOCK_SIZE);
             //auto r = in.gcount();
 
-            uint64_t bmtim = 0;
+            uint64_t bmtim;
+            cdc512 blk_ctx(std::leave_uninitialized);
+            std::key512 prev_blk_digest(std::leave_uninitialized);
 
             st_blk_sel.bind("entry_id", entry_id);
             st_blk_sel.bind("block_no", blk_no);
             auto i = st_blk_sel.begin();
-            cdc512 blk_ctx(std::leave_uninitialized);
 
             if( i ) {
                 bmtim = i->get<uint64_t>("mtime");
-                blk_ctx = i->get<std::key512>("digest");
-            }
-            else {
-                blk_ctx.init();
+                prev_blk_digest = i->get<std::key512>("digest");
             }
 
-            if( bmtim == 0 || bmtim != mtim ) {
+            if( !i || bmtim != mtim ) {
                 auto r =
 #if _MSC_VER
                 _read
 #else
                 ::read
 #endif
-                    (in, &buf[0], uint32_t(block_size));
+                    (in, buf.get(), uint32_t(block_size));
 
                 if( r == -1 ) {
                     //err = errno;
@@ -821,18 +858,26 @@ void directory_indexer::reindex(
                 //if( size_t(r) < block_size )
                 //    std::memset(&buf[r], 0, block_size - r);
 
-                blk_ctx.update(std::begin(buf), std::begin(buf) + r);
+                blk_ctx.init();
+                blk_ctx.update(std::make_range(buf, r));
                 blk_ctx.final();
 
-                update_block_digest(entry_id, blk_no, mtim, blk_ctx);
-            }
+                update_block_digest(entry_id, blk_no, mtim, blk_ctx, prev_blk_digest);
+                update_snap = true;
 
-            file_ctx.update(std::begin(blk_ctx), std::end(blk_ctx));
+                file_ctx.update(std::begin(blk_ctx), std::end(blk_ctx));
+            }
+            else if( i )
+                file_ctx.update(std::begin(prev_blk_digest), std::end(prev_blk_digest));
         }
 
         st_blk_del.bind("entry_id", entry_id);
         st_blk_del.bind("block_no", blk_no);
         st_blk_del.execute();
+
+        st_rt_del.bind("entry_id", entry_id);
+        st_rt_del.bind("block_no", blk_no);
+        st_rt_del.execute();
 
         tx_deadline();
 
@@ -911,10 +956,31 @@ void directory_indexer::reindex(
 
     dr.read(dir_path_name);
 
-    if( !modified_only_ || root.mtim != root.mtime ) {
+    if( !modified_only_ || root.mtim != root.mtime || update_snap ) {
+        cdc512 digest(std::leave_uninitialized);
+
+        st_sel.bind("parent_id", root.id);
+        st_sel.bind("name", dr.path_, sqlite3pp::nocopy);
+
+        auto i = st_sel.begin();
+
+        if( i )
+            digest = i->get<std::key512>("digest");
+
+        struct {
+            uint64_t shortcut;
+            uint64_t entropy;
+            std::key512 key;
+        } a;
+
+        a.shortcut = digest.hash();
+        a.entropy = entropy_fast();
+        a.key = digest;
+        digest.update(&a, sizeof(a));
+
+        st_upd_after.bind("digest", digest, sqlite3pp::nocopy);
         st_upd_after.bind("id", root.id);
         st_upd_after.bind("mtime", root.mtime);
-        st_upd_after.bind("digest", nullptr);
         st_upd_after.execute();
     }
 

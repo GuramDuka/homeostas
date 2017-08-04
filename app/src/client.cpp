@@ -148,9 +148,10 @@ void client::worker()
                     if( *socket_ ) {
                         ss.reset(socket_);
 
-                        ss << "Hello" << std::flush;
-                        std::string s;
-                        ss >> s;
+                        //ss << "Hello" << std::flush;
+                        //std::string s;
+                        //ss >> s;
+                        task_();
                     }
                 }
             }

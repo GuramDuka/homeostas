@@ -26,28 +26,26 @@
 #include "port.hpp"
 #include "cdc512.hpp"
 #include "tracker.hpp"
+#include "client.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-void directory_tracker::worker()
+void directory_tracker::connect_db()
 {
-    sqlite3pp::database db;
+    if( db_ == nullptr ) {
+        db_ = std::make_unique<sqlite3pp::database>();
 
-    directory_indexer di;
-    di.modified_only(true);
+        if( access(db_path_, F_OK) != 0 && errno == ENOENT )
+            mkdir(db_path_);
 
-    auto connect_db = [&] {
-        if( db.connected() )
-            return;
-
-        db.connect(
+        db_->connect(
             db_path_name_,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
         );
 
-        db.execute_all(R"EOS(
+        db_->execute_all(R"EOS(
             PRAGMA busy_timeout = 3000;
             PRAGMA page_size = 4096;
             PRAGMA journal_mode = WAL;
@@ -57,16 +55,29 @@ void directory_tracker::worker()
             PRAGMA synchronous = NORMAL;
             /*PRAGMA temp_store = MEMORY;*/
         )EOS");
-    };
+    }
+}
+//------------------------------------------------------------------------------
+void directory_tracker::detach_db()
+{
+    db_ = nullptr;
+}
+//------------------------------------------------------------------------------
+void directory_tracker::worker()
+{
+    at_scope_exit( detach_db() );
+
+    directory_indexer di;
+    di.modified_only(true);
 
     for(;;) {
         try {
             connect_db();
-            di.reindex(db, dir_path_name_, &shutdown_);
+            di.reindex(*db_, dir_path_name_, &shutdown_);
         }
         catch( const std::exception & e ) {
-            error_ = e.what();
-            db.disconnect();
+            std::cerr << e << std::endl;
+            detach_db();
         }
 
         std::unique_lock<std::mutex> lk(mtx_);
@@ -74,15 +85,10 @@ void directory_tracker::worker()
         if( cv_.wait_for(lk, std::chrono::seconds(60), [&] { return shutdown_ || oneshot_; }) )
             break;
     }
-
-    db.disconnect();
 }
 //------------------------------------------------------------------------------
-void directory_tracker::startup()
+void directory_tracker::make_path_name()
 {
-    if( started_ )
-        return;
-
     auto remove_forbidden_characters = [] (const auto & s) {
         std::string t;
 
@@ -125,9 +131,14 @@ void directory_tracker::startup()
     db_name_ = make_name(dir_user_defined_name_.empty() ? dir_path_name_ : dir_user_defined_name_)
         + ".sqlite";
     db_path_name_ = db_path_ + path_delimiter + db_name_;
+}
+//------------------------------------------------------------------------------
+void directory_tracker::startup()
+{
+    if( started_ )
+        return;
 
-    if( access(db_path_, F_OK) != 0 && errno == ENOENT )
-        mkdir(db_path_);
+    make_path_name();
 
     shutdown_ = false;
     worker_result_ = thread_pool_t::instance()->enqueue(&directory_tracker::worker, this);
@@ -135,6 +146,66 @@ void directory_tracker::startup()
 }
 //------------------------------------------------------------------------------
 void directory_tracker::shutdown()
+{
+    if( !started_ )
+        return;
+
+    std::unique_lock<std::mutex> lk(mtx_);
+    shutdown_ = true;
+    lk.unlock();
+    cv_.notify_one();
+
+    worker_result_.wait();
+    started_ = false;
+}
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+void remote_directory_tracker::server()
+{
+}
+//------------------------------------------------------------------------------
+void remote_directory_tracker::client()
+{
+->track_remote_directory(host_public_key_, key_, snap_key);
+}
+//------------------------------------------------------------------------------
+void remote_directory_tracker::worker()
+{
+    at_scope_exit( detach_db() );
+
+    auto client = std::make_unique<client>();
+    client->enqueue(std::bind(&remote_directory_tracker::client, this));
+
+    for(;;) {
+        try {
+            connect_db();
+        }
+        catch( const std::exception & e ) {
+            std::cerr << e << std::endl;
+            detach_db();
+        }
+
+        std::unique_lock<std::mutex> lk(mtx_);
+
+        if( cv_.wait_for(lk, std::chrono::seconds(60), [&] { return shutdown_ || oneshot_; }) )
+            break;
+    }
+}
+//------------------------------------------------------------------------------
+void remote_directory_tracker::startup()
+{
+    if( started_ )
+        return;
+
+    make_path_name();
+
+    shutdown_ = false;
+    worker_result_ = thread_pool_t::instance()->enqueue(&remote_directory_tracker::worker, this);
+    started_ = true;
+}
+//------------------------------------------------------------------------------
+void remote_directory_tracker::shutdown()
 {
     if( !started_ )
         return;

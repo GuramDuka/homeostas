@@ -306,6 +306,11 @@ struct cdc512 : public std::key512 {
         return update(&*first, (last - first) * sizeof(*first));
     }
 
+    template <typename T>
+    auto & update(const std::ptr_range<T> & range) {
+        return update(range.begin(), range.end());
+    }
+
     cdc512 & init();
     cdc512 & update(const void * data, uintptr_t size);
     cdc512 & final();

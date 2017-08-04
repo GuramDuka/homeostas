@@ -62,7 +62,7 @@ void server::control()
         auto addrs = d.discover_host(host_public_key_);
 
         for( const auto & a : addrs )
-            if( a.is_link_local() || a.is_loopback() )
+            if( !a.is_link_local() && !a.is_loopback() )
                 return a.port();
 
         return std::ihash<uint16_t>(entropy_fast());
@@ -74,6 +74,8 @@ void server::control()
         auto t = basic_socket::interfaces();
         std::sort(t.begin(), t.end());
 
+        std::unique_lock<std::mutex> lock(mtx_);
+
         auto r = !std::equal(t.begin(), t.end(), interfaces.begin(), interfaces.end(), socket_addr::addr_equ)
             && t.size() != interfaces.size();
 
@@ -84,6 +86,7 @@ void server::control()
     };
 
     auto recheck_public_addrs = [&] {
+        std::unique_lock<std::mutex> lock(mtx_);
         std::vector<socket_addr> t;
 
         for( const auto & a : interfaces ) {
@@ -94,8 +97,6 @@ void server::control()
         }
 
         std::sort(t.begin(), t.end());
-
-        std::unique_lock<std::mutex> lock(mtx_);
 
         auto r = !std::equal(t.begin(), t.end(), public_addrs_.begin(), public_addrs_.end(), socket_addr::addr_equ)
             && t.size() != public_addrs_.size();
@@ -110,8 +111,6 @@ void server::control()
     std::vector<std::shared_future<void>> accepters_results;
 
     auto reinitialize = [&] {
-        auto nport = std::rhash(port);
-
         for( auto s : sockets )
             s->interrupt(true).close();
         for( auto a : accepters_results )
@@ -140,7 +139,7 @@ void server::control()
                 thread_pool_t::instance()->enqueue(&server::accepter, this, sockets[i]));
 
         if( !sockets.empty() )
-            port_ = nport;
+            port_ = port;
     };
 
     auto wait = [&] (const std::chrono::seconds & s) {
@@ -179,7 +178,7 @@ void server::control()
                 if( !sockets.empty() )
                     break;
 
-                port++;
+                port = std::rhash(decltype(port) (port + 1));
                 port_changed = true;
 
                 wait(std::chrono::seconds(sockets.empty() ? 60 : 1));
@@ -187,8 +186,6 @@ void server::control()
 
             if( shutdown_ )
                 break;
-
-            d.announce_host(host_public_key_, &interfaces);
 
             bool public_addrs_changed = recheck_public_addrs();
 
@@ -206,16 +203,24 @@ void server::control()
                     natpmp_->private_port(port_);
                     natpmp_->port_mapping_lifetime(60);
                     natpmp_->mapped_callback([&] {
-                        std::vector<socket_addr> t;
-                        t.emplace_back(natpmp_->public_addr());
-                        std::cerr << t.back() << std::endl;
+                        std::unique_lock<std::mutex> lock(mtx_);
+                        public_addrs_.clear();
+                        public_addrs_.emplace_back(natpmp_->public_addr());
+
+                        std::cerr << public_addrs_.back() << std::endl;
 #if QT_CORE_LIB
-                        qDebug().noquote().nospace() << QString::fromStdString(std::to_string(t.back()));
+                        qDebug().noquote().nospace() << QString::fromStdString(std::to_string(public_addrs_.back()));
 #endif
 
                         announcer_ = std::make_unique<announcer>();
-                        announcer_->pubs(t);
+                        announcer_->pubs(public_addrs_);
                         announcer_->startup();
+
+                        auto t = public_addrs_ + interfaces;
+                        lock.unlock();
+
+                        discoverer dtmp;
+                        dtmp.announce_host(host_public_key_, t);
                     });
                     natpmp_->startup();
                 }
@@ -227,6 +232,7 @@ void server::control()
                     announcer_ = std::make_unique<announcer>();
                     announcer_->pubs(public_addrs_);
                     announcer_->startup();
+                    d.announce_host(host_public_key_, public_addrs_ + interfaces);
                 }
             }
         }
@@ -307,9 +313,9 @@ void server::worker(std::shared_ptr<active_socket> socket)
 
     while( !shutdown_ ) {
         try {
-            std::string s;
-            ss >> s;
-            ss << "Ehlo" << std::flush;
+            //std::string s;
+            //ss >> s;
+            //ss << "Ehlo" << std::flush;
 
             //std::cerr
             //    << "accepted: "

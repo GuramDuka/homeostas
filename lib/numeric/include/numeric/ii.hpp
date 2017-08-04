@@ -64,11 +64,26 @@ class integer {
 			return r;
 		}
 
+        template <typename InputIt>
+        static auto integer_distance_size(InputIt first, InputIt last) {
+            return std::distance(first, last) * sizeof(*first);
+        }
+
+        template <typename InputIt>
+        integer(InputIt first, InputIt last) :
+            proxy_(nn_new(integer_distance_size(first, last) / sizeof(word)
+                    + (integer_distance_size(first, last) % sizeof(word) ? 1 : 0)))
+        {
+            auto size = integer_distance_size(first, last);
+            memcpy(proxy_->data_, &*first, size);
+            memset((uint8_t *) proxy_->data_ + size, 0, (proxy_->length_ + 1) * sizeof(word) - size);
+        }
+
         integer(const void * data, size_t size) :
             proxy_(nn_new(size / sizeof(word) + (size % sizeof(word) ? 1 : 0)))
         {
-            proxy_->data_[proxy_->length_] = proxy_->data_[proxy_->length_ - 1] = 0;
             memcpy(proxy_->data_, data, size);
+            memset((uint8_t *) proxy_->data_ + size, 0, (proxy_->length_ + 1) * sizeof(word) - size);
         }
 
 		integer() : integer((long long) 0) {}

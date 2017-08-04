@@ -58,6 +58,10 @@ public:
         return instance()->trackers_;
     }
 
+    static auto & trackers_ifs() {
+        return instance()->trackers_ifs_;
+    }
+
     QString uniqueId() const {
         return uniqueId_;
     }
@@ -67,13 +71,10 @@ public:
     }
 signals:
 public slots:
-    QString newUniqueId();
+    static std::key512 newUniqueKey();
 
     void startServer();
     void stopServer();
-
-    void startClient();
-    void stopClient();
 
     void loadTrackers();
     void startTrackers();
@@ -81,8 +82,8 @@ public slots:
 private:
     QString uniqueId_;
     std::vector<std::shared_ptr<homeostas::directory_tracker>> trackers_;
+    std::vector<std::shared_ptr<homeostas::directory_tracker_interface>> trackers_ifs_;
     std::unique_ptr<homeostas::server> server_;
-    std::unique_ptr<homeostas::client> client_;
 };
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
@@ -152,7 +153,10 @@ class DirectoriesTrackersModel : public QAbstractListModel {
 public:
     enum DirectoryTrackerRole {
         DirectoryUserDefinedNameRole = Qt::DisplayRole,
-        DirectoryPathNameRole = Qt::UserRole
+        DirectoryKey = Qt::UserRole,
+        DirectoryPathNameRole,
+        DirectoryRemote,
+        DirectoryIsRemote
     };
     Q_ENUM(DirectoryTrackerRole)
 
@@ -167,11 +171,12 @@ public:
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const;
     QHash<int, QByteArray> roleNames() const;
 
+    Q_INVOKABLE void load();
     Q_INVOKABLE QVariantMap get(int row) const;
     Q_INVOKABLE void append(const QString &directoryUserDefinedName, const QString &directoryPathName);
+    Q_INVOKABLE void append_remote(const QString &directoryUserDefinedName, const QString &directoryPathName);
     Q_INVOKABLE void set(int row, const QString &directoryUserDefinedName, const QString &directoryPathName);
     Q_INVOKABLE void remove(int row);
-
 private:
 };
 //------------------------------------------------------------------------------

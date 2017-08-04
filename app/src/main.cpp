@@ -51,20 +51,22 @@ int main(int argc, char ** argv)
     //homeostas::tests::run_tests();
 
     at_scope_exit(
-        Homeostas::instance()->stopClient();
         Homeostas::instance()->stopServer();
         Homeostas::instance()->stopTrackers();
     );
 
     //qSetMessagePattern("[%{type}] %{file}, %{line}: %{message}");
 
-#ifdef Q_OS_ANDROID
     auto logger = [] (const std::string & s) {
+#ifdef Q_OS_ANDROID
         QAndroidJniObject::callStaticMethod<void>(
             "org/homeostas/HomeostasService",
             "logFromService",
             "(Ljava/lang/String;)V",
             QAndroidJniObject::fromString(QString::fromStdString(s)).object<jstring>());
+#else
+        qDebug().noquote().nospace() << QString::fromStdString(s);
+#endif
     };
 
     if( daemon ) {
@@ -84,41 +86,25 @@ int main(int argc, char ** argv)
 
         return app.exec();
     }
-#endif
 
-#ifndef Q_OS_ANDROID
-    if( daemon ) {
-        QCoreApplication app(argc, argv);
+    // debug testing only
+#if !defined(Q_OS_ANDROID) && !defined(NDEBUG)
+    if( !daemon ) {
         try {
             Homeostas::instance()->startTrackers();
             Homeostas::instance()->startServer();
         }
         catch( const std::exception & e ) {
-            qDebug().noquote().nospace() << e.what();
+            logger(e.what());
         }
         catch( ... ) {
-            qDebug().noquote().nospace() << "undefined c++ exception catched";
+            logger("undefined c++ exception catched");
         }
     }
 #endif
 
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QGuiApplication app(argc, argv);
-
-// debug testing only
-#ifndef Q_OS_ANDROID
-    try {
-        Homeostas::instance()->startTrackers();
-        Homeostas::instance()->startServer();
-        Homeostas::instance()->startClient();
-    }
-    catch( const std::exception & e ) {
-        qDebug().noquote().nospace() << e.what();
-    }
-    catch( ... ) {
-        qDebug().noquote().nospace() << "undefined c++ exception catched";
-    }
-#endif
 
     //qmlRegisterType<DirectoryTracker>("com.homeostas.directorytracker", 1, 0, "QDirectoryTracker");
     //qmlRegisterType<DirectoriesTrackersModel>("Backend", 1, 0, "DirectoriesTrackersModel");

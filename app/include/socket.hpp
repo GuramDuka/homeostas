@@ -137,6 +137,7 @@ int get_default_gateway(in_addr * addr, in_addr * mask = nullptr);
 //------------------------------------------------------------------------------
 struct socket_addr {
     union {
+        sockaddr                sa;
         sockaddr_storage        storage;
         sockaddr_in             saddr4;      // IPv4 address
         sockaddr_in6            saddr6;      // IPv6 address
@@ -260,32 +261,33 @@ struct socket_addr {
     }
 
     const void * data() const {
-        return storage.ss_family == AF_INET ? (const void *) &saddr4 :
-            storage.ss_family == AF_INET6 ? (const void *) &saddr6 :
-                (const void *) &storage;
+        return (const void *) &sa;
     }
 
     void * data() {
-        return storage.ss_family == AF_INET ? (void *) &saddr4 :
-            storage.ss_family == AF_INET6 ? (void *) &saddr6 :
-                (void *) &storage;
+        return (void *) &sa;
+    }
+
+    static socklen_t size(const sockaddr * sa) {
+        return sa->sa_family == AF_INET ? sizeof(saddr4) :
+            sa->sa_family == AF_INET6 ? sizeof(saddr6) : 0;
+    }
+
+    static socklen_t size(const sockaddr & sa) {
+        return sa.sa_family == AF_INET ? sizeof(saddr4) :
+            sa.sa_family == AF_INET6 ? sizeof(saddr6) : 0;
     }
 
     socklen_t size() const {
-        return storage.ss_family == AF_INET ? sizeof(saddr4) :
-            storage.ss_family == AF_INET6 ? sizeof(saddr6) : 0;
+        return size(sa);
     }
 
     const sockaddr * sock_data() const {
-        return storage.ss_family == AF_INET ? (const sockaddr *) &saddr4 :
-            storage.ss_family == AF_INET6 ? (const sockaddr *) &saddr6 :
-                (const sockaddr *) &storage;
+        return &sa;
     }
 
     sockaddr * sock_data() {
-        return storage.ss_family == AF_INET ? (sockaddr *) &saddr4 :
-            storage.ss_family == AF_INET6 ? (sockaddr *) &saddr6 :
-                (sockaddr *) &storage;
+        return &sa;
     }
 
     socket_addr & clear() {
@@ -1261,23 +1263,20 @@ public:
         return window_size(SO_SNDBUF, nWindowSize);
     }
 
-    bool disable_nagle_algoritm()	{
+    bool disable_nagle_algoritm() {
 		bool  bRetVal = false;
 		int32_t nTcpNoDelay = 1;
 
 		//----------------------------------------------------------------------
 		// Set TCP NoDelay flag to true
 		//----------------------------------------------------------------------
-        if (setsockopt(socket_, IPPROTO_TCP, TCP_NODELAY, (const char *) &nTcpNoDelay, sizeof(int32_t)) == 0)
-		{
+        if( setsockopt(socket_, IPPROTO_TCP, TCP_NODELAY, (const char *) &nTcpNoDelay, sizeof(int32_t)) == 0 )
 			bRetVal = true;
-		}
 
         translate_socket_error();
 
 		return bRetVal;
 	}
-
 
     bool enable_nagle_algoritm() {
 		bool  bRetVal = false;
@@ -1286,10 +1285,8 @@ public:
 		//----------------------------------------------------------------------
 		// Set TCP NoDelay flag to false
 		//----------------------------------------------------------------------
-        if (setsockopt(socket_, IPPROTO_TCP, TCP_NODELAY, (const char *) &nTcpNoDelay, sizeof(int32_t)) == 0)
-		{
+        if( setsockopt(socket_, IPPROTO_TCP, TCP_NODELAY, (const char *) &nTcpNoDelay, sizeof(int32_t)) == 0 )
 			bRetVal = true;
-		}
 
         translate_socket_error();
 
@@ -1605,40 +1602,6 @@ protected:
 		return nWindowSize;
 	}
 
-    bool flush() {
-        int32_t nTcpNoDelay = 1;
-        int32_t nCurFlags = 0;
-        uint8_t tmpbuf = 0;
-        bool  bRetVal = false;
-
-        //--------------------------------------------------------------------------
-        // Get the current setting of the TCP_NODELAY flag.
-        //--------------------------------------------------------------------------
-        socklen_t sz = sizeof(nCurFlags);
-
-        if( getsockopt(socket_, IPPROTO_TCP, TCP_NODELAY, (char *) &nCurFlags, &sz) == 0 ) {
-            //----------------------------------------------------------------------
-            // Set TCP NoDelay flag
-            //----------------------------------------------------------------------
-            if( setsockopt(socket_, IPPROTO_TCP, TCP_NODELAY, (const char *) &nTcpNoDelay, sz) == 0 ) {
-                //------------------------------------------------------------------
-                // Send empty byte stream to flush the TCP send buffer
-                //------------------------------------------------------------------
-                send(&tmpbuf, 0);
-
-                if( socket_errno_ != SocketError )
-                    bRetVal = true;
-            }
-
-            //----------------------------------------------------------------------
-            // Reset the TCP_NODELAY flag to original state.
-            //----------------------------------------------------------------------
-            setsockopt(socket_, IPPROTO_TCP, TCP_NODELAY, (const char *) &nCurFlags, sz);
-        }
-
-        return bRetVal;
-    }
-
     static const char * str_error(SocketErrors err) {
         switch( err ) {
             case SocketError:
@@ -1938,7 +1901,7 @@ public:
                 return *this;
         }
 
-        if( ::connect(socket_, (const sockaddr *) addr.data(), addr.size()) == SocketError ) {
+        if( ::connect(socket_, addr.sock_data(), addr.size()) == SocketError ) {
             throw_translate_socket_error();
             return *this;
         }
@@ -2256,7 +2219,7 @@ public:
         setsockopt(socket_, IPPROTO_TCP, IP_TOS, (const char *) &low, sizeof(low));
 #endif
 
-        if( ::bind(socket_, (const sockaddr *) addr.data(), addr.size()) == SocketError ) {
+        if( ::bind(socket_, addr.sock_data(), addr.size()) == SocketError ) {
             throw_translate_socket_error();
             return *this;
         }

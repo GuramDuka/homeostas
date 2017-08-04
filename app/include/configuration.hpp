@@ -60,6 +60,7 @@ public:
 
     variable & operator = (const variable & o) {
         if( this != &o ) {
+            pid_      = o.pid_;
             id_       = o.id_;
             name_     = o.name_;
             value_    = o.value_;
@@ -75,6 +76,7 @@ public:
 
     variable & operator = (variable && o) {
         if( this != &o ) {
+            pid_      = std::move(o.pid_);
             id_       = std::move(o.id_);
             name_     = std::move(o.name_);
             value_    = std::move(o.value_);
@@ -83,11 +85,13 @@ public:
         return *this;
     }
 
-    auto & operator [] (const char * name) {
+    template <typename std::size_t _Sz>
+    auto & operator [] (const char (&name) [_Sz]) {
         return childs()->at(name);
     }
 
-    const auto & operator [] (const char * name) const {
+    template <typename std::size_t _Sz>
+    const auto & operator [] (const char (&name) [_Sz]) const {
         return childs()->at(name);
     }
 
@@ -99,6 +103,42 @@ public:
         return childs()->at(name);
     }
 
+    template <typename std::size_t _Sz>
+    auto find(const char (&name) [_Sz]) {
+        return childs()->find(name);
+    }
+
+    template <typename std::size_t _Sz>
+    auto find(const char (&name) [_Sz]) const {
+        return childs()->find(name);
+    }
+
+    auto find(const std::string & name) {
+        return childs()->find(name);
+    }
+
+    auto find(const std::string & name) const {
+        return childs()->find(name);
+    }
+
+    template <typename std::size_t _Sz>
+    auto exists(const char (&name) [_Sz]) {
+        return childs()->find(name) != childs()->end();
+    }
+
+    template <typename std::size_t _Sz>
+    auto exists(const char (&name) [_Sz]) const {
+        return childs()->find(name) != childs()->end();
+    }
+
+    auto exists(const std::string & name) {
+        return childs()->find(name) != childs()->end();
+    }
+
+    auto exists(const std::string & name) const {
+        return childs()->find(name) != childs()->end();
+    }
+
 #if QT_CORE_LIB
     auto & operator [] (const QString & name) {
         return childs()->at(name.toStdString());
@@ -106,6 +146,22 @@ public:
 
     const auto & operator [] (const QString & name) const {
         return childs()->at(name.toStdString());
+    }
+
+    auto find(const QString & name) {
+        return childs()->find(name.toStdString());
+    }
+
+    auto find(const QString & name) const {
+        return childs()->find(name.toStdString());
+    }
+
+    auto exists(const QString & name) {
+        return childs()->find(name.toStdString()) != childs()->end();
+    }
+
+    auto exists(const QString & name) const {
+        return childs()->find(name.toStdString()) != childs()->end();
     }
 #endif
 
@@ -150,8 +206,8 @@ protected:
         new (childs_) childs_type;
     }
 
-    variable(uint64_t id, const char * name, std::variant && value) :
-        id_(id), name_(name), value_(std::move(value))
+    variable(uint64_t pid, uint64_t id, const char * name, std::variant && value) :
+        pid_(pid), id_(id), name_(name), value_(std::move(value))
     {
         static_assert( sizeof(childs_) >= sizeof(childs_type), "sizeof(childs_) >= sizeof(childs_type)" );
         new (childs_) childs_type;
@@ -165,6 +221,7 @@ protected:
         return reinterpret_cast<const childs_type *>(childs_);
     }
 
+    uint64_t pid_;
     uint64_t id_;
     std::string name_;
     std::variant value_;
@@ -194,10 +251,15 @@ public:
     }
 
     configuration & set(const char * var_name, const std::variant & val);
-    configuration & set(const char * var_name, const char * val);
 
-    auto & set(const std::string & var_name, const char * val) {
-        return set(var_name.c_str(), val);
+    template <typename std::size_t _Sz>
+    configuration & set(const char * var_name, const char (&val) [_Sz]) {
+        return set(var_name, val, 0);
+    }
+
+    template <typename std::size_t _Sz>
+    auto & set(const std::string & var_name, const char (&val) [_Sz]) {
+        return set(var_name.c_str(), val, 0);
     }
 
     auto & set(const std::string & var_name, const std::variant & val) {
@@ -222,7 +284,7 @@ public:
         for( const auto & v : var )
             set(v.second);
 
-        set(var.id_, var.name_.c_str(), var.value_);
+        set(var.pid_, var.id_, var.name_.c_str(), var.value_);
 
         return *this;
     }
@@ -242,7 +304,7 @@ public:
 #if QT_CORE_LIB
     struct string_hash {
         size_t operator () (const QString & val) const {
-            return std::ithash<size_t>(val.begin(), val.end(),
+            return std::itifhash<size_t>(val.begin(), val.end(),
                 [] (const auto & c) { return c.unicode(); });
         }
     };
@@ -279,7 +341,8 @@ public:
         db_ = nullptr;
         return *this;
     }
-
+protected:
+    configuration & set(const char * var_name, const char * val, int);
 private:
     configuration(const configuration &) = delete;
     void operator = (const configuration &) = delete;
@@ -315,7 +378,7 @@ private:
     }
 
     template <typename F>
-    auto & set(uint64_t pid, const char * var_name, F val_setter) {
+    auto & set(uint64_t pid, uint64_t id, const char * var_name, F val_setter) {
         connect_db();
 
         auto bindey = [&] (auto & st) {
@@ -332,25 +395,27 @@ private:
             st->bind("value_l"  , nullptr);
         };
 
-        bindey(st_sel_);
+        if( id == 0 )
+            id = row_next_id_();
 
-        auto i = st_sel_->begin();
+        //bindey(st_sel_);
+        //auto i = st_sel_->begin();
+        db_->exceptions(false);
+        st_ins_->bind("id", id);
+        bindex(st_ins_);
+        val_setter(st_ins_);
+        db_->exceptions(true);
 
-        if( i ) {
+        if( st_ins_->rc() == SQLITE_CONSTRAINT_UNIQUE ) {
             bindex(st_upd_);
             val_setter(st_upd_);
-        }
-        else {
-            bindex(st_ins_);
-            st_ins_->bind("id", row_next_id_());
-            val_setter(st_ins_);
         }
 
         return *this;
     }
 
-    configuration & set(uint64_t pid, const char * var_name, const std::variant & val) {
-        return set(pid, var_name, [&] (auto & st) {
+    configuration & set(uint64_t pid, uint64_t id, const char * var_name, const std::variant & val) {
+        return set(pid, id, var_name, [&] (auto & st) {
             switch( val.type() ) {
                 case std::variant::Null            :
                     break;

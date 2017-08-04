@@ -62,7 +62,7 @@ void discoverer::connect_db()
             CREATE INDEX IF NOT EXISTS i1 ON known_announcers (expire);
 
             CREATE TABLE IF NOT EXISTS known_peers (
-                public_key      BLOB PRIMARY KEY ON CONFLICT ABORT,
+                key             BLOB PRIMARY KEY ON CONFLICT ABORT,
                 p2p_key         BLOB,
                 addrs           BLOB,
                 mtime			INTEGER,
@@ -80,14 +80,14 @@ void discoverer::connect_db()
             FROM
                 known_peers
             WHERE
-                public_key = :public_key
+                key = :key
         )EOS");
 
         st_ins_peer_ = std::make_unique<sqlite3pp::command>(*db_, R"EOS(
             INSERT INTO known_peers
-                (public_key, p2p_key, addrs, mtime, expire)
+                (key, p2p_key, addrs, mtime, expire)
                 VALUES
-                (:public_key, :p2p_key, :addrs, :mtime, :expire)
+                (:key, :p2p_key, :addrs, :mtime, :expire)
         )EOS");
 
         st_upd_peer_ = std::make_unique<sqlite3pp::command>(*db_, R"EOS(
@@ -97,7 +97,7 @@ void discoverer::connect_db()
                 mtime   = :mtime,
                 expire  = :expire
             WHERE
-                public_key = :public_key
+                key = :key
         )EOS");
     }
 }
@@ -121,7 +121,6 @@ void discoverer::worker(std::shared_ptr<active_socket> socket)
         //    << std::endl;
     }
     catch( const std::ios_base::failure & e ) {
-        std::unique_lock<std::mutex> lock(mtx_);
         std::cerr << e << std::endl;
         throw;
     }
@@ -158,7 +157,7 @@ discoverer & discoverer::announce_host(
 {
     connect_db();
 
-    st_sel_peer_->bind("public_key", public_key, sqlite3pp::nocopy);
+    st_sel_peer_->bind("key", public_key, sqlite3pp::nocopy);
 #if QT_CORE_LIB
 //    qDebug().noquote().nospace() << "announce_host: " <<
 //        QString::fromStdString(std::to_string(std::blob(std::begin(public_key), std::end(public_key))));
@@ -166,12 +165,12 @@ discoverer & discoverer::announce_host(
 
     auto bind = [&] (auto & st) {
         std::blob packed_addrs;
-        st->bind("public_key", public_key, sqlite3pp::nocopy);
+        st->bind("key", public_key, sqlite3pp::nocopy);
 
         if( p_addrs != nullptr ) {
 
             for( const auto & a : *p_addrs )
-                std::copy(std::make_range((const uint8_t *) a.data(), a.size()),
+                std::copy(std::make_range((const uint8_t *) a.sock_data(), a.size()),
                     packed_addrs.end(), packed_addrs.end(),
                     std::back_inserter(packed_addrs));
 
@@ -220,7 +219,7 @@ std::vector<socket_addr> discoverer::discover_host(const std::key512 & public_ke
     std::vector<socket_addr> addrs;
 
     connect_db();
-    st_sel_peer_->bind("public_key", public_key, sqlite3pp::nocopy);
+    st_sel_peer_->bind("key", public_key, sqlite3pp::nocopy);
 #if QT_CORE_LIB
 //    qDebug().noquote().nospace() << "discover_host: " <<
 //        QString::fromStdString(std::to_string(std::blob(std::begin(public_key), std::end(public_key))));
@@ -235,12 +234,16 @@ std::vector<socket_addr> discoverer::discover_host(const std::key512 & public_ke
 
         while( size_t(std::distance(b, e)) >= sizeof(sockaddr) ) {
             auto sa = reinterpret_cast<const sockaddr *>(&*b);
-            addrs.emplace_back(*sa);
-            auto sz = addrs.back().size();
-            if( sz == 0 ) {
-                addrs.pop_back();
+            auto sz = socket_addr::size(sa);
+
+            if( sz == 0 )
+                break;
+
+            if( decltype(sz) (std::distance(b, e)) >= sz ) {
+                addrs.emplace_back(*sa);
                 break;
             }
+
             b += sz;
         }
 
@@ -254,7 +257,7 @@ std::vector<socket_addr> discoverer::discover_host(const std::key512 & public_ke
 std::key512 discoverer::discover_host_p2p_key(const std::key512 & public_key)
 {
     connect_db();
-    st_sel_peer_->bind("public_key", public_key, sqlite3pp::nocopy);
+    st_sel_peer_->bind("key", public_key, sqlite3pp::nocopy);
 
     at_scope_exit( st_sel_peer_->reset() );
     auto i = st_sel_peer_->begin();

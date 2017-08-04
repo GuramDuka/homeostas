@@ -137,3 +137,18 @@ else:win32-g++:CONFIG(debug, debug|release): PRE_TARGETDEPS += $$OUT_PWD/../lib/
 else:win32:!win32-g++:CONFIG(release, debug|release): PRE_TARGETDEPS += $$OUT_PWD/../lib/sqlite3pp/release/sqlite3pp.lib
 else:win32:!win32-g++:CONFIG(debug, debug|release): PRE_TARGETDEPS += $$OUT_PWD/../lib/sqlite3pp/debug/sqlite3pp.lib
 else:unix: PRE_TARGETDEPS += $$OUT_PWD/../lib/sqlite3pp/libsqlite3pp.a
+
+# link jsoncpp
+
+win32:CONFIG(release, debug|release): LIBS += -L$$OUT_PWD/../lib/jsoncpp/release/ -ljsoncpp
+else:win32:CONFIG(debug, debug|release): LIBS += -L$$OUT_PWD/../lib/jsoncpp/debug/ -ljsoncpp
+else:unix: LIBS += -L$$OUT_PWD/../lib/jsoncpp/ -ljsoncpp
+
+INCLUDEPATH += $$PWD/../lib/jsoncpp/include
+DEPENDPATH += $$PWD/../lib/jsoncpp/include
+
+win32-g++:CONFIG(release, debug|release): PRE_TARGETDEPS += $$OUT_PWD/../lib/jsoncpp/release/libjsoncpp.a
+else:win32-g++:CONFIG(debug, debug|release): PRE_TARGETDEPS += $$OUT_PWD/../lib/jsoncpp/debug/libjsoncpp.a
+else:win32:!win32-g++:CONFIG(release, debug|release): PRE_TARGETDEPS += $$OUT_PWD/../lib/jsoncpp/release/jsoncpp.lib
+else:win32:!win32-g++:CONFIG(debug, debug|release): PRE_TARGETDEPS += $$OUT_PWD/../lib/jsoncpp/debug/jsoncpp.lib
+else:unix: PRE_TARGETDEPS += $$OUT_PWD/../lib/jsoncpp/libjsoncpp.a

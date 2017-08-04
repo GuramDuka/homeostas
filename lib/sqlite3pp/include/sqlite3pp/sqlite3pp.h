@@ -636,6 +636,14 @@ namespace sqlite3pp {
                 return bind(idx, nullptr);
             return bind(idx, value.data(), value.size() * sizeof(value[0]), fcopy);
         }
+
+        const auto & rc() const {
+            return rc_;
+        }
+
+        const auto & db() const {
+            return db_;
+        }
     protected:
         ~statement() {
             // finish() can return error. If you want to check the error, call
@@ -668,15 +676,6 @@ namespace sqlite3pp {
                 db_.throw_database_error();
             return rc_;
         }
-
-        const auto & rc() const {
-            return rc_;
-        }
-
-        const auto & db() const {
-            return db_;
-        }
-
     protected:
         database & db_;
         sqlite3_stmt * stmt_;

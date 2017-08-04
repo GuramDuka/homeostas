@@ -268,7 +268,7 @@ inline string operator + (const string & s1, const char * s2) {
 template <typename T, typename InputIt,
     typename enable_if<is_integral<T>::value>::type * = nullptr
 > inline
-T stoint(InputIt first, InputIt last, int base = 10) {
+T stoint(InputIt first, InputIt last, int base = 10, bool nothrow = false) {
     T result = T(0);
 
     typedef typename InputIt::value_type value_type;
@@ -280,8 +280,9 @@ T stoint(InputIt first, InputIt last, int base = 10) {
     while( ::isspace(char_to_int(*first)) )
         first++;
 
-    auto throw_invalid = [] {
-        throw invalid_argument("to_int: invalid string");
+    auto throw_invalid = [&] {
+        if( !nothrow )
+            throw invalid_argument("to_int: invalid string");
     };
 
     bool neg = false, sign = false;
@@ -310,11 +311,15 @@ T stoint(InputIt first, InputIt last, int base = 10) {
             else
                 result = result * base + (c - 'a');
         }
-        else
+        else {
             throw_invalid();
+            break;
+        }
 
-        if( sign && i != first )
+        if( sign && i != first ) {
             throw_invalid();
+            break;
+        }
     }
 
     if( neg ) {
@@ -576,9 +581,7 @@ H ihash(const T & v, H h = H(0)) {
     return h;
 }
 //------------------------------------------------------------------------------
-template <typename H, typename InputIt,
-    typename enable_if<container_traits<InputIt>::is_iterator>::type * = nullptr
-> inline
+template <typename H, typename InputIt> inline
 H ithash(InputIt first, InputIt last, H h = H(0)) {
     while( first != last ) {
         h += H(*first++);
@@ -594,7 +597,7 @@ H ithash(InputIt first, InputIt last, H h = H(0)) {
 }
 //------------------------------------------------------------------------------
 template <typename H, typename InputIt, typename PredT> inline
-H ithash(InputIt first, InputIt last, PredT pred, H h = H(0)) {
+H itifhash(InputIt first, InputIt last, PredT pred, H h = H(0)) {
     while( first != last ) {
         h += H(pred(*first++));
         h += h << (sizeof(h) * CHAR_BIT / 4 + 1);
@@ -767,6 +770,11 @@ ptr_range<const T> make_range(const void * ptr, size_t length) {
     return ptr_range<const T>(static_cast<const T *>(ptr), length);
 }
 //------------------------------------------------------------------------------
+template <typename T> inline
+ptr_range<const T> make_range(const unique_ptr<T> & u, size_t length) {
+    return ptr_range<const T>(u.get(), length);
+}
+//------------------------------------------------------------------------------
 template <typename InpT, class OutputIt> inline
 OutputIt copy(ptr_range<InpT> inp, OutputIt d_first, OutputIt d_last)
 {
@@ -824,6 +832,24 @@ OutputIt transform(ptr_range<InpT> inp,
                    UnaryOperation unary_op)
 {
     return transform(inp.begin(), inp.end(), out.begin(), out.end(), inserter, unary_op);
+}
+//------------------------------------------------------------------------------
+template <typename T, typename A> inline
+std::vector<T, A> operator+(const std::vector<T, A> & a, const std::vector<T, A> & b)
+{
+    std::vector<T> ab;
+    ab.reserve(a.size() + b.size());                // preallocate memory
+    ab.insert(ab.end(), a.begin(), a.end());        // add A;
+    ab.insert(ab.end(), b.begin(), b.end());        // add B;
+    return ab;
+}
+//------------------------------------------------------------------------------
+template <typename T, typename A> inline
+std::vector<T, A> & operator += (std::vector<T, A> & a, const std::vector<T, A> & b)
+{
+    a.reserve(a.size() + b.size());                // preallocate memory without erase original data
+    a.insert(a.end(), b.begin(), b.end());         // add B;
+    return a;                                      // here A could be named AB
 }
 //------------------------------------------------------------------------------
 ////////////////////////////////////////////////////////////////////////////////
@@ -920,6 +946,10 @@ public:
         return *this;
     }
 
+    auto hash() const {
+        return std::ithash<uint64_t>(begin(), end());
+    }
+
     bool operator == (const uint8_t (&o) [64]) const {
         auto s = reinterpret_cast<const uint64_t *>(data());
         auto d = reinterpret_cast<const uint64_t *>(o);
@@ -990,36 +1020,64 @@ constexpr const T uint_max(const T, const M multiplier)
     return m;
 }
 #endif
-inline string to_string(const key512 & b)
+template <typename T,
+    typename enable_if<std::is_integral<T>::value>::type * = nullptr
+> inline
+void to_string36(string & s, size_t & i, T m,
+    const char delimiter = '-',
+    const size_t interval = 9)
 {
-    constexpr const char * abc = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    constexpr const char delimiter = '-';
-    constexpr const size_t interval = 9;
-    string s;
-    size_t i = 0;
+    constexpr static const char abc[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     auto l = nn::word(36); // slen(abc));
     //assert( l == 36 );
-    nn::integer a(b.data(), b.size()), d(uint_max<nn::dword>(1, 36)), mod;
+
+    while( m ) {
+        s.push_back(abc[m % l]);
+        m /= l;
+
+        if( delimiter != '\0' && interval != 0 && ++i == interval ) {
+            s.push_back(delimiter);
+            i = 0;
+        }
+    }
+}
+//---------------------------------------------------------------------------
+template <typename InputIt>
+inline string to_string36(InputIt first, InputIt last,
+    const char delimiter = '-',
+    const size_t interval = 9)
+{
+    string s;
+    size_t i = 0;
+    //auto l = nn::word(36); // slen(abc));
+    //assert( l == 36 );
+    nn::integer a(first, last), d(uint_max<uintmax_t>(1, 36)), mod;
 
     while( a.is_notz() ) {
         a = a.div(d, &mod);
-        auto m = nn::dword(mod);
-
-        while( m ) {
-            s.push_back(abc[m % l]);
-            m /= l;
-
-            if( delimiter != '\0' && interval != 0 && ++i == interval ) {
-                s.push_back(delimiter);
-                i = 0;
-            }
-        }
+        to_string36(s, i, uintmax_t(mod), delimiter, interval);
     }
 
     if( delimiter != '\0' && interval != 0 && s.back() == delimiter )
         s.pop_back();
 
     return s;
+}
+//---------------------------------------------------------------------------
+template <typename T,
+    typename enable_if<std::is_integral<T>::value>::type * = nullptr
+> inline
+string to_string36(T m)
+{
+    string s;
+    size_t i = 0;
+    to_string36(s, i, m, '\0', 0);
+    return s;
+}
+//---------------------------------------------------------------------------
+inline string to_string(const key512 & b)
+{
+    return to_string36(b.begin(), b.end());
 }
 //---------------------------------------------------------------------------
 inline key512 stokey512(const string & s,

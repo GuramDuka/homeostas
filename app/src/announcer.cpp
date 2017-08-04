@@ -57,17 +57,26 @@ void announcer::worker()
             "User-Agent: homeostas\r\n"
             "Accept: text/html\r\n"
             "Accept-Encoding: identity\r\n"
-            "Connection: close\r\n"
+            "Connection: keep-alive\r\n"
             "Cache-Control: max-age=0, no-cache, no-store, must-revalidate\r\n";
 
-            for( const auto & a : pubs_ )
-                ss << "Announce-Address: " << a << "\r\n";
+            {
+                std::ostringstream aa;
+                //std::unique_lock<std::mutex> lock(mtx_);
 
-            ss << "\r\n" << std::flush;
+                aa << "Announce-Public-Key: " << std::to_string(host_key_) << "\r\n";
+
+                for( const auto & a : pubs_ )
+                    aa << "Announce-Address: " << a << "\r\n";
+
+                ss << aa << "\r\n";
+            }
+
+            ss << std::flush;
 
             ss.delimiter("\r\n");
             ss.exceptions(ss.exceptions() & ~std::ios::eofbit);
-            size_t content_length = 0;
+            size_t content_length = 0, http_code = 0;
 
             while( !ss.eof() ) {
                 std::string resp;
@@ -75,6 +84,9 @@ void announcer::worker()
 
                 if( std::starts_with_case(resp, "Content-Length:") )
                     content_length = std::stoint<size_t>(resp.begin() + 15, resp.end());
+
+                if( std::starts_with_case(resp, "HTTP/1.1") )
+                    http_code = std::stoint<size_t>(resp.begin() + 8, resp.end(), 10, true);
 
                 if( resp.empty() )
                     break;
@@ -99,7 +111,8 @@ void announcer::worker()
             qDebug().noquote().nospace() << QString::fromStdString(resp);
 #endif
 
-            break;
+            if( http_code == 200 )
+                break;
         }
         catch( const std::exception & e ) {
             std::cerr << e << std::endl;

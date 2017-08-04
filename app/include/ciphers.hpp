@@ -43,7 +43,8 @@ struct light_cipher : protected cdc512 {
 
     void init(const std::key512 & key) {
         cdc512::init(key);
-        mask_ring = end();
+        mask_ring_ = end();
+        mishmash_ring_ = std::begin(mishmash_);
     }
 
     template <typename InpIt, typename OutIt>
@@ -51,54 +52,22 @@ struct light_cipher : protected cdc512 {
         assert( std::distance(first, last) == std::distance(d_first, d_last) );
 
         std::transform(first, last, d_first, d_last, [&] (const auto & a) {
-            if( mask_ring == this->end() ) {
+            if( mask_ring_ == this->end() ) {
                 this->update(this->begin(), this->end());
-                mask_ring = this->begin();
+                mask_ring_ = this->begin();
             }
 
-            return (typename OutIt::value_type) (a) ^ (typename OutIt::value_type) (*mask_ring++);
-        });
-    }
+            auto mask = *mask_ring_++;
+            auto result = (typename OutIt::value_type) (a) ^ (typename OutIt::value_type) (mask);
 
-    template <typename InpRange, typename OutRange>
-    void encode(InpRange s_range, OutRange d_range) {
-        encode(std::begin(s_range), std::end(s_range), std::begin(d_range), std::end(d_range));
-    }
-
-    void encode(void * dst, const void * src, size_t length) {
-        encode(std::make_range<const uint8_t>(src, length), std::make_range<uint8_t>(dst, length));
-    }
-
-    iterator mask_ring;
-};
-//------------------------------------------------------------------------------
-////////////////////////////////////////////////////////////////////////////////
-//------------------------------------------------------------------------------
-// rand<7, uint64_t> expected period is: 2^^8511
-struct strong_cipher : protected rand<7, uint64_t> {
-    typedef rand<7, uint64_t> base;
-
-    void init(const std::key512 & key) {
-        base::init(std::begin(key), std::end(key));
-        mask_ring = std::end(mask);
-    }
-
-    template <typename InpIt, typename OutIt>
-    void encode(InpIt first, InpIt last, OutIt d_first, OutIt d_last) {
-        assert( std::distance(first, last) == std::distance(d_first, d_last) );
-
-        std::transform(first, last, d_first, d_last, [&] (const auto & a) {
-            if( mask_ring == std::end(mask) ) {
-#if BYTE_ORDER == LITTLE_ENDIAN
-                mask_v = this->get();
-#endif
-#if BYTE_ORDER == BIG_ENDIAN
-                mask_v = htole64(this->get());
-#endif
-                mask_ring = std::begin(mask);
+            if( mishmash_ring_ == std::end(mishmash_) ) {
+                this->shuffle(mishmash_shuffler_);
+                mishmash_ring_ = std::begin(mishmash_);
             }
 
-            return (typename OutIt::value_type) (a) ^ (typename OutIt::value_type) (*mask_ring++);
+            *mishmash_ring_++ = uint8_t(mask);
+
+            return result;
         });
     }
 
@@ -112,10 +81,57 @@ struct strong_cipher : protected rand<7, uint64_t> {
     }
 
     union {
-        uint8_t mask[sizeof(value_type)];
-        value_type mask_v;
+        std::shuffler512 mishmash_shuffler_;
+        uint8_t mishmash_[sizeof(std::shuffler512)];
     };
-    decltype(std::begin(mask)) mask_ring;
+    decltype(std::begin(mishmash_)) mishmash_ring_;
+    iterator mask_ring_;
+};
+//------------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+// rand<7, uint64_t> expected period is: 2^^8511
+struct strong_cipher : protected rand<7, uint64_t> {
+    typedef rand<7, uint64_t> base;
+
+    void init(const std::key512 & key) {
+        base::init(std::begin(key), std::end(key));
+        mask_ring_ = std::end(mask_);
+    }
+
+    template <typename InpIt, typename OutIt>
+    void encode(InpIt first, InpIt last, OutIt d_first, OutIt d_last) {
+        assert( std::distance(first, last) == std::distance(d_first, d_last) );
+
+        std::transform(first, last, d_first, d_last, [&] (const auto & a) {
+            if( mask_ring_ == std::end(mask_) ) {
+#if BYTE_ORDER == LITTLE_ENDIAN
+                mask_v_ = this->get();
+#endif
+#if BYTE_ORDER == BIG_ENDIAN
+                mask_v = htole64(this->get());
+#endif
+                mask_ring_ = std::begin(mask_);
+            }
+
+            return (typename OutIt::value_type) (a) ^ (typename OutIt::value_type) (*mask_ring_++);
+        });
+    }
+
+    template <typename InpRange, typename OutRange>
+    void encode(InpRange s_range, OutRange d_range) {
+        encode(std::begin(s_range), std::end(s_range), std::begin(d_range), std::end(d_range));
+    }
+
+    void encode(void * dst, const void * src, size_t length) {
+        encode(std::make_range<const uint8_t>(src, length), std::make_range<uint8_t>(dst, length));
+    }
+
+    union {
+        uint8_t mask_[sizeof(value_type)];
+        value_type mask_v_;
+    };
+    decltype(std::begin(mask_)) mask_ring_;
 };
 //------------------------------------------------------------------------------
 } // namespace homeostas

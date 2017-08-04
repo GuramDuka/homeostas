@@ -65,6 +65,12 @@ public:
         const std::vector<socket_addr> * p_addrs = nullptr,
         const std::key512 * p_p2p_key = nullptr);
 
+    discoverer & announce_host(
+        const std::key512 & public_key,
+        const std::vector<socket_addr> & addrs) {
+        return announce_host(public_key, &addrs);
+    }
+
     std::vector<socket_addr> discover_host(const std::key512 & public_key, std::key512 * p_p2p_key = nullptr);
     std::key512 discover_host_p2p_key(const std::key512 & public_key);
 
