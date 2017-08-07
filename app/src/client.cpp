@@ -129,31 +129,40 @@ void client::worker()
 
     while( !shutdown_ ) {
         try {
-            auto addrs = d.discover_host(server_public_key_, &p2p_key);
+            if( !socket_->connected() ) {
+                auto addrs = d.discover_host(server_public_key_, &p2p_key);
 
-            while( !shutdown_ && !addrs.empty() ) {
-                auto e = addrs.rend(), addr = std::find_if(addrs.rbegin(), e, [] (const auto & a) {
-                    return a.is_loopback();
-                });
+                while( !shutdown_ && !addrs.empty() ) {
+                    auto e = addrs.rend(), addr = std::find_if(addrs.rbegin(), e, [] (const auto & a) {
+                        return a.is_loopback();
+                    });
 
-                if( addr == e )
-                    addr = addrs.rbegin();
+                    if( addr == e )
+                        addr = addrs.rbegin();
 
-                if( addr != e ) {
-                    socket_->exceptions(false);
-                    socket_->connect(*addr);
-                    socket_->exceptions(true);
-                    addrs.erase(addr.base() - 1);
+                    if( addr != e ) {
+                        socket_->exceptions(false);
+                        socket_->connect(*addr);
+                        socket_->exceptions(true);
+                        addrs.erase(addr.base() - 1);
 
-                    if( *socket_ ) {
-                        ss.reset(socket_);
-
-                        //ss << "Hello" << std::flush;
-                        //std::string s;
-                        //ss >> s;
-                        task_();
+                        if( *socket_ ) {
+                            ss.reset(socket_);
+                            //ss << "Hello" << std::flush;
+                            //std::string s;
+                            //ss >> s;
+                            break;
+                        }
                     }
                 }
+            }
+
+            if( socket_->connected() ) {
+                std::unique_lock<std::mutex> lock(mtx_);
+                cv_.wait(lock, [&] { return shutdown_ || task_.valid(); });
+                auto task = std::move(task_);
+                lock.unlock();
+                task(ss);
             }
         }
         catch( const std::exception & e ) {

@@ -1018,19 +1018,48 @@ namespace sqlite3pp {
 
     class transaction : noncopyable {
     public:
+        ~transaction() {
+            if( db_ != nullptr ) {
+                // execute() can return error. If you want to check the error,
+                // call commit() or rollback() explicitly before this object is
+                // destructed.
+                db_->execute(rollback_ ? "ROLLBACK" : "COMMIT");
+            }
+        }
+
         explicit transaction(database * db, bool immediate = false, bool rollback = false)
             : db_(db), rollback_(rollback)
         {
             start(immediate);
         }
 
-        ~transaction() {
-            if (db_ != nullptr) {
-                // execute() can return error. If you want to check the error,
-                // call commit() or rollback() explicitly before this object is
-                // destructed.
-                db_->execute(rollback_ ? "ROLLBACK" : "COMMIT");
+        explicit transaction(database & db, bool immediate = false, bool rollback = false)
+            : db_(&db), rollback_(rollback)
+        {
+            start(immediate);
+        }
+
+        explicit transaction(database * db, int, bool rollback = false)
+            : db_(db), rollback_(rollback)
+        {
+        }
+
+        explicit transaction(database & db, int, bool rollback = false)
+            : db_(&db), rollback_(rollback)
+        {
+        }
+
+        transaction(transaction && t) {
+            *this = t;
+        }
+
+        transaction & operator = (transaction && t) {
+            if( this != &t ) {
+                db_ = t.db_;
+                t.db_ = nullptr;
+                rollback_ = t.rollback_;
             }
+            return *this;
         }
 
         auto & release() {
@@ -1060,6 +1089,9 @@ namespace sqlite3pp {
         }
 
     private:
+        transaction(const transaction &);
+        void operator = (const transaction &);
+
         database * db_;
         bool rollback_;
     };

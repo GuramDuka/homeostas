@@ -1841,7 +1841,9 @@ public:
 
     // Move assignment operator
     active_socket & operator = (active_socket && o) noexcept {
-        return move(*this, o);
+        move(*this, o);
+        connected_ = std::move(o.connected_);
+        return *this;
     }
 
     active_socket(SocketType socket_type = SocketTypeTCP) {
@@ -1889,6 +1891,7 @@ public:
     }
 
     active_socket & connect(const socket_addr & addr, const socket_addr * p_bind_addr = nullptr) {
+        connected_ = false;
         open(addr.family(), socket_type_, socket_proto_);
 
         if( invalid() )
@@ -1910,6 +1913,7 @@ public:
         getpeername(socket_, (sockaddr *) &remote_addr_, &as);
         getsockname(socket_, (sockaddr *) &local_addr_, &as);
 
+        connected_ = true;
         interrupt_ = false;
         socket_errno_ = SocketSuccess;
 
@@ -1935,6 +1939,7 @@ public:
         auto r = getaddrinfo(node, service, &hints, &result);
 
         if( r != 0 ) {
+            connected_ = false;
             socket_errno_ = SocketEUnknown;
             auto e =
                 std::string(str_error()) + ", " +
@@ -1953,6 +1958,7 @@ public:
         }
 
         if( result == nullptr ) {
+            connected_ = false;
             socket_errno_ = SocketEUnknown;
             throw_socket_error();
             return *this;
@@ -1978,6 +1984,7 @@ public:
                 && rp->ai_socktype != socket_type_ )
                 continue;
 
+            connected_ = false;
             open(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 
             if( valid() )
@@ -2002,6 +2009,7 @@ public:
         as = sizeof(local_addr_);
         getsockname(socket_, (sockaddr *) &local_addr_, &as);
 
+        connected_ = true;
         interrupt_ = false;
         socket_errno_ = SocketSuccess;
 
@@ -2011,7 +2019,12 @@ public:
     static std::shared_ptr<active_socket> shared() {
         return std::make_unique<active_socket>();
     }
+
+    auto connected() const {
+        return connected_;
+    }
 protected:
+    bool connected_ = false;
 private:
     active_socket(const active_socket & basic_socket);
     void operator = (const active_socket &);

@@ -58,18 +58,14 @@ public:
     void startup();
     void shutdown();
 
-    template <class F, class... Args>
-    auto enqueue(F&& f, Args&&... args)
-        -> std::future<typename std::result_of<F(Args...)>::type>
-    {
-        using return_type = typename std::result_of<F(Args...)>::type;
-        auto task = std::make_shared<std::packaged_task<return_type()> >(
-            std::bind(std::forward<F>(f), std::forward<Args>(args)...));
-        std::future<return_type> res = task->get_future();
-
-        task_ = [task] { (*task)(); };
-
-        return res;
+    template <typename F>
+    void enqueue(F task) {
+        std::unique_lock<std::mutex> lock(mtx_);
+        task_ = decltype(task_) (task);
+        std::future<void> f = task_.get_future();
+        lock.unlock();
+        cv_.notify_one();
+        f.wait();
     }
 
     auto & server_public_key(const std::key512 & key) {
@@ -94,9 +90,9 @@ protected:
 
     std::key512 server_public_key_;
     std::key512 client_public_key_;
-    std::function<void()> task_;
-    std::unique_ptr<active_socket> socket_;
+    std::packaged_task<void(socket_stream & ss)> task_;
     std::shared_future<void> worker_result_;
+    std::unique_ptr<active_socket> socket_;
     std::mutex mtx_;
     std::condition_variable cv_;
     bool shutdown_;

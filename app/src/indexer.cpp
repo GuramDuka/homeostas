@@ -470,25 +470,25 @@ void directory_indexer::reindex(
 
         CREATE TABLE IF NOT EXISTS remote_trackers (
             key             BLOB PRIMARY KEY ON CONFLICT ABORT, /* remote tracker host public key */
-            ctime			INTEGER NOT NULL,                   /* nanoseconds */
             mtime			INTEGER NOT NULL                    /* nanoseconds */
         ) WITHOUT ROWID;
 
         CREATE TABLE IF NOT EXISTS remote_tracking (
             key             BLOB NOT NULL,      /* remote tracker host public key */
             entry_id        INTEGER NOT NULL,   /* link on entries rowid */
-            block_no		INTEGER NOT NULL    /* file block number starting from one */
+            block_no		INTEGER NOT NULL,   /* file block number starting from one */
+            deleted         INTEGER
             UNIQUE(entry_id, block_no, key) ON CONFLICT REPLACE
         ) /*WITHOUT ROWID*/;
-        CREATE UNIQUE INDEX IF NOT EXISTS i4 ON remote_tracking (key, entry_id, block_no, key);
-        /*CREATE INDEX IF NOT EXISTS i5 ON remote_tracking (entry_id);
-        CREATE INDEX IF NOT EXISTS i6 ON remote_tracking (entry_id, block_no);*/
+        CREATE UNIQUE INDEX IF NOT EXISTS i4 ON remote_tracking (entry_id, block_no, key);
+        CREATE INDEX IF NOT EXISTS i5 ON remote_tracking (entry_id);
+        CREATE INDEX IF NOT EXISTS i6 ON remote_tracking (entry_id, block_no);
 
         CREATE TRIGGER IF NOT EXISTS entries_after_delete_trigger
             AFTER DELETE
             ON entries FOR EACH ROW
         BEGIN
-            DELETE FROM remote_tracking WHERE entry_id = old.id;
+            /*DELETE FROM remote_tracking WHERE entry_id = old.id;*/
             DELETE FROM blocks_digests WHERE entry_id = old.id;
         END;
 
@@ -496,7 +496,30 @@ void directory_indexer::reindex(
             AFTER DELETE
             ON blocks_digests FOR EACH ROW
         BEGIN
-            DELETE FROM remote_tracking WHERE entry_id = old.entry_id AND block_no = old.block_no;
+            REPLACE INTO remote_tracking
+                SELECT
+                    key, old.entry_id, old.block_no, 1
+               FROM
+                   remote_trackers
+            /*DELETE FROM remote_tracking WHERE entry_id = old.entry_id AND block_no = old.block_no;*/
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS remote_trackers_after_insert_trigger
+            AFTER INSERT
+            ON remote_trackers FOR EACH ROW
+        BEGIN
+            REPLACE INTO remote_tracking
+                SELECT
+                    new.key, entry_id, block_no, NULL
+                FROM
+                    blocks_digests
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS remote_trackers_after_delete_trigger
+            AFTER DELETE
+            ON remote_trackers FOR EACH ROW
+        BEGIN
+            DELETE FROM remote_tracking WHERE key = old.key;
         END;
     )EOS");
 
@@ -507,9 +530,18 @@ void directory_indexer::reindex(
             entries
         WHERE
             id = :id
+        UNION ALL
+        SELECT
+            entry_id
+        FROM
+            remote_tracking
+        WHERE
+            entry_id = :id
     )EOS");
 
-    uint64_t row_id = entropy_fast();
+    uint64_t row_id;
+
+    while( (row_id = entropy_fast()) == 0 );
 
     auto row_next_id = [&] {
         at_scope_exit( row_next_id_st.reset() );
@@ -519,7 +551,7 @@ void directory_indexer::reindex(
             auto i = row_next_id_st.begin();
 
             if( i ) {
-                row_id = std::ihash<uint64_t>(std::rhash(row_id));
+                while( (row_id = std::ihash<uint64_t>(std::rhash(row_id) + 1) ^ row_id) == 0 );
             }
             else
                 break;
@@ -612,16 +644,17 @@ void directory_indexer::reindex(
     sqlite3pp::command st_rt_rpl(db, R"EOS(
         REPLACE INTO remote_tracking
             SELECT
-                key, :entry_id, :block_no
+                key, :entry_id, :block_no, NULL
             FROM
                 remote_trackers
     )EOS");
 
     sqlite3pp::command st_rt_del(db, R"EOS(
-        DELETE FROM remote_tracking
-        WHERE
-            entry_id = :entry_id
-            AND block_no > :block_no
+        REPLACE INTO remote_tracking
+            SELECT
+                key, :entry_id, :block_no, 1
+            FROM
+                remote_trackers
     )EOS");
 
     struct parent_dir {
@@ -642,6 +675,7 @@ void directory_indexer::reindex(
         if( now >= deadline ) {
             tx.commit();
             tx.start();
+            tx_start = now;
         }
     };
 

@@ -313,6 +313,14 @@ void server::worker(std::shared_ptr<active_socket> socket)
 
     while( !shutdown_ ) {
         try {
+            uint8_t module_code;
+            ss >> module_code;
+
+            if( module_code < 1 || module_code >= modules_.size() )
+                break;
+
+            modules_[module_code](ss, peer_pubic_key);
+
             //std::string s;
             //ss >> s;
             //ss << "Ehlo" << std::flush;

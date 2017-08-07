@@ -92,10 +92,18 @@ void Homeostas::startServer()
     at_scope_exit( homeostas::configuration::instance()->detach_db() );
 
     server_ = std::make_unique<homeostas::server>();
+
     server_->host_public_key(
         homeostas::configuration::instance()->get("host.public_key"));
+
     server_->host_private_key(
         homeostas::configuration::instance()->get("host.private_key"));
+
+    server_->modules().resize(1);
+    server_->modules().insert(
+        server_->modules().begin() + homeostas::ServerModuleRDT,
+        homeostas::remote_directory_tracker::server_module);
+
     server_->startup();
 }
 //------------------------------------------------------------------------------

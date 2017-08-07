@@ -76,6 +76,30 @@ public:
         return host_private_key_;
     }
 
+    class module {
+    public:
+        virtual ~module() {}
+        module() {}
+    protected:
+        virtual void worker() = 0;
+
+        socket_stream ss_;
+        std::key512 peer_pubic_key_;
+        std::key512 p2p_key_;
+    private:
+        module(const module &) = delete;
+        module(module &&) = delete;
+        void operator = (const module &) = delete;
+        void operator = (module &&) = delete;
+    };
+
+    auto & modules() {
+        return modules_;
+    }
+
+    const auto & modules() const {
+        return modules_;
+    }
 protected:
     void control();
     void accepter(std::shared_ptr<passive_socket> socket);
@@ -84,6 +108,7 @@ protected:
     std::unique_ptr<natpmp> natpmp_;
     std::unique_ptr<announcer> announcer_;
     std::vector<socket_addr> public_addrs_;
+    std::vector<std::function<void(socket_stream & ss, const std::key512 & key)>> modules_;
     std::shared_future<void> control_result_;
     std::list<std::shared_future<void>> workers_results_;
     std::mutex mtx_;
@@ -98,6 +123,10 @@ protected:
 private:
     server(const server &) = delete;
     void operator = (const server &) = delete;
+};
+//------------------------------------------------------------------------------
+enum ServerModule {
+   ServerModuleRDT = 1
 };
 //------------------------------------------------------------------------------
 namespace tests {

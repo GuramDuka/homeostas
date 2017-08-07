@@ -101,6 +101,7 @@ void negotiator::client_side_handshake(basic_socket * socket)
         };
 
         socket->disable_nagle_algoritm();
+        socket->receive_window_size(0);
         socket->send_window_size(0);
 
         handshake_functor_(req.get(), nullptr, nullptr, nullptr);
@@ -172,6 +173,7 @@ void negotiator::server_side_handshake(basic_socket * socket)
         };
 
         socket->disable_nagle_algoritm();
+        socket->receive_window_size(0);
         socket->send_window_size(0);
 
         res->proto_version      = proto_;

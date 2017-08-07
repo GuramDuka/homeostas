@@ -37,6 +37,7 @@
 #include <condition_variable>
 //------------------------------------------------------------------------------
 #include "indexer.hpp"
+#include "server.hpp"
 //------------------------------------------------------------------------------
 namespace homeostas {
 //------------------------------------------------------------------------------
@@ -273,10 +274,100 @@ public:
     virtual bool is_local()  const { return false; }
     virtual bool is_remote() const { return true; }
     virtual std::key512 remote() const { return remote_directory_tracker_interface::remote(); }
+
+    static void server_module(socket_stream & ss, const std::key512 & key);
+
+    enum OperationCode {
+        OperationCodeACK = 0,
+        OperationCodeRequestChanges = 1
+    };
+
+#if _WIN32
+#   pragma pack(1)
+#endif
+    struct PACKED server_side_entry_response {
+        std::string name;
+        uint64_t parent_id;
+        uint64_t entry_id;
+        uint64_t mtime;
+        uint64_t file_size;
+        uint64_t block_size;
+        std::key512::value_type digest[std::key512::ssize()];
+        uint8_t is_dir;
+    };
+
+    struct PACKED server_side_block_response {
+        uint64_t block_no; // if zero then terminate entry
+        uint8_t deleted;
+        uint8_t commit;
+    };
+#if _WIN32
+#   pragma pack()
+#endif
+
 protected:
     void worker();
+    void server_worker(socket_stream & ss, const std::key512 & key);
 private:
 };
+//------------------------------------------------------------------------------
+inline auto & operator << (
+    socket_stream & ss,
+    const remote_directory_tracker::server_side_entry_response & e)
+{
+    ss << e.name
+#if BYTE_ORDER == LITTLE_ENDIAN
+        << e.parent_id << e.entry_id
+        << e.mtime << e.file_size << e.block_size
+#elif BYTE_ORDER == BIG_ENDIAN
+    << std::htole(e.parent_id) << std::htole(e.entry_id);
+    << std::htole(e.mtime) << std::htole(e.file_size) << std::htole(e.block_size)
+    << e.digest
+    << e.is_dir;
+#endif
+        << e.digest
+        << e.is_dir;
+    return ss;
+}
+//------------------------------------------------------------------------------
+inline auto & operator >> (
+    socket_stream & ss,
+    remote_directory_tracker::server_side_entry_response & e)
+{
+    ss >> e.name >> e.parent_id >> e.entry_id
+        >> e.mtime >> e.file_size >> e.block_size >> e.is_dir;
+#if BYTE_ORDER == BIG_ENDIAN
+    e.parent_id = std::letoh(e.parent_id);
+    e.entry_id = std::letoh(e.entry_id);
+    e.mtime = std::letoh(e.mtime);
+    e.file_size = std::letoh(e.file_size);
+    e.block_size = std::letoh(e.block_size);
+#endif
+    return ss;
+}
+//------------------------------------------------------------------------------
+inline auto & operator << (
+    socket_stream & ss,
+    const remote_directory_tracker::server_side_block_response & e)
+{
+#if BYTE_ORDER == LITTLE_ENDIAN
+    ss << e.block_no << e.deleted << e.commit;
+#elif BYTE_ORDER == BIG_ENDIAN
+    ss << std::htole(e.block_no) << e.deleted << e.commit;
+#endif
+    return ss;
+}
+//------------------------------------------------------------------------------
+inline auto & operator >> (
+    socket_stream & ss,
+    remote_directory_tracker::server_side_block_response & e)
+{
+    ss >> e.block_no >> e.deleted >> e.commit;
+#if BYTE_ORDER == BIG_ENDIAN
+    e.block_no = std::letoh(e.block_no);
+#endif
+    return ss;
+}
 //------------------------------------------------------------------------------
 namespace tests {
 //------------------------------------------------------------------------------
